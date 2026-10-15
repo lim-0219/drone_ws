@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "dataset_kind": "real",
+  "ned_frame_id": "flight-001-ekf-origin-0",
+  "telemetry_csv": "telemetry.csv",
+  "camera": {"footprint_m": [5.0, 10.0], "reference_agl_m": 5.0, "image_top_yaw_offset_rad": 0.0},
+  "grid": {"spacing_m": [2.5, 5.0], "heading_rad": 0.0},
+  "images": [
+    {"id": 5, "file": "images/capture_01.png", "timestamp_s": 100.0},
+    {"id": 4, "file": "images/capture_02.png", "timestamp_s": 102.0},
+    {"id": 1, "file": "images/capture_03.png", "timestamp_s": 104.0},
+    {"id": 2, "file": "images/capture_04.png", "timestamp_s": 106.0},
+    {"id": 3, "file": "images/capture_05.png", "timestamp_s": 108.0},
+    {"id": 6, "file": "images/capture_06.png", "timestamp_s": 110.0},
+    {"id": 9, "file": "images/capture_07.png", "timestamp_s": 112.0},
+    {"id": 8, "file": "images/capture_08.png", "timestamp_s": 114.0},
+    {"id": 7, "file": "images/capture_09.png", "timestamp_s": 116.0}
+  ]
+}
+

@@ -1,0 +1,17 @@
+# colcon / ROS 2
+build/
+install/
+log/
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# editor / os
+.vscode/
+.DS_Store
+__MACOSX/

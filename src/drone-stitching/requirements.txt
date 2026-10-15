@@ -1,0 +1,5 @@
+# Runtime versions compatible with Ubuntu 22.04 / Python 3.10.
+numpy==1.26.4
+scipy==1.14.1
+opencv-python-headless==4.10.0.84
+

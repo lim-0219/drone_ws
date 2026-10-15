@@ -1,0 +1,349 @@
+{
+  "version": 1,
+  "dataset_kind": "real",
+  "ned_frame_id": "sheffield-gps-derived-reference-DJI_0075",
+  "camera": {
+    "footprint_m": [
+      106.08974072925244,
+      79.56730554693932
+    ],
+    "reference_agl_m": 61.3,
+    "image_top_yaw_offset_rad": 0.0,
+    "scale_note": "Approximation from EXIF 35mm focal length and DJI relative altitude. Relative altitude is assumed height only for nominal scale; true AGL and intrinsics are unverified."
+  },
+  "grid": {
+    "spacing_m": [
+      21.0,
+      31.0
+    ],
+    "heading_rad": 0.0
+  },
+  "images": [
+    {
+      "id": 5,
+      "file": "images/DJI_0075.JPG",
+      "ned_m": [
+        0.0,
+        0.0,
+        -0.0
+      ],
+      "yaw_rad": -1.5742869852988852,
+      "source_metadata": {
+        "file": "DJI_0075.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.03911616666667,
+        "longitude_deg": -82.69684736111111,
+        "exif_gps_altitude_m": -2.311,
+        "capture_time_original": "2017:04:30 12:01:50",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.31,
+          "RelativeAltitude": 61.3,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": -90.2,
+          "GimbalPitchDegree": -89.9,
+          "FlightRollDegree": -6.5,
+          "FlightYawDegree": -90.1,
+          "FlightPitchDegree": -6.3,
+          "FlightXSpeed": -0.1,
+          "FlightYSpeed": -11.2,
+          "FlightZSpeed": 0.0
+        },
+        "north_from_first_m": -10.069235893119071,
+        "east_from_first_m": 25.163324510275633
+      }
+    },
+    {
+      "id": 4,
+      "file": "images/DJI_0076.JPG",
+      "ned_m": [
+        -0.3047552288211275,
+        -17.204361346870414,
+        -0.19999999999999973
+      ],
+      "yaw_rad": -1.546361717266976,
+      "source_metadata": {
+        "file": "DJI_0076.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.03911341666667,
+        "longitude_deg": -82.69702233333334,
+        "exif_gps_altitude_m": -2.111,
+        "capture_time_original": "2017:04:30 12:01:52",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.11,
+          "RelativeAltitude": 61.5,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": -88.6,
+          "GimbalPitchDegree": -89.9,
+          "FlightRollDegree": -3.3,
+          "FlightYawDegree": -87.3,
+          "FlightPitchDegree": 17.6,
+          "FlightXSpeed": 0.0,
+          "FlightYSpeed": -5.6,
+          "FlightZSpeed": 0.1
+        },
+        "north_from_first_m": -10.373991121940199,
+        "east_from_first_m": 7.958963163405219
+      }
+    },
+    {
+      "id": 1,
+      "file": "images/DJI_0062.JPG",
+      "ned_m": [
+        -30.170767651716766,
+        -16.158279365663894,
+        0.30000000000000027
+      ],
+      "yaw_rad": 1.6772614111665507,
+      "source_metadata": {
+        "file": "DJI_0062.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.038843916666668,
+        "longitude_deg": -82.69701169444444,
+        "exif_gps_altitude_m": -2.611,
+        "capture_time_original": "2017:04:30 12:01:24",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.61,
+          "RelativeAltitude": 61.0,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": 96.1,
+          "GimbalPitchDegree": -90.0,
+          "FlightRollDegree": 12.9,
+          "FlightYawDegree": 87.4,
+          "FlightPitchDegree": -23.5,
+          "FlightXSpeed": 0.5,
+          "FlightYSpeed": 4.5,
+          "FlightZSpeed": 0.0
+        },
+        "north_from_first_m": -40.24000354483584,
+        "east_from_first_m": 9.00504514461174
+      }
+    },
+    {
+      "id": 2,
+      "file": "images/DJI_0063.JPG",
+      "ned_m": [
+        -29.14568188193833,
+        -3.1245895190679107,
+        0.20000000000000018
+      ],
+      "yaw_rad": 1.6580627893946132,
+      "source_metadata": {
+        "file": "DJI_0063.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.03885316666667,
+        "longitude_deg": -82.69687913888889,
+        "exif_gps_altitude_m": -2.511,
+        "capture_time_original": "2017:04:30 12:01:26",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.51,
+          "RelativeAltitude": 61.1,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": 95.0,
+          "GimbalPitchDegree": -89.9,
+          "FlightRollDegree": 18.5,
+          "FlightYawDegree": 87.4,
+          "FlightPitchDegree": -17.8,
+          "FlightXSpeed": 0.3,
+          "FlightYSpeed": 6.7,
+          "FlightZSpeed": 0.0
+        },
+        "north_from_first_m": -39.2149177750574,
+        "east_from_first_m": 22.038734991207722
+      }
+    },
+    {
+      "id": 3,
+      "file": "images/DJI_0065.JPG",
+      "ned_m": [
+        -30.36470279722284,
+        28.036635850010367,
+        0.10000000000000009
+      ],
+      "yaw_rad": 1.6283921921107094,
+      "source_metadata": {
+        "file": "DJI_0065.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.03884216666667,
+        "longitude_deg": -82.69656222222223,
+        "exif_gps_altitude_m": -2.411,
+        "capture_time_original": "2017:04:30 12:01:30",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.41,
+          "RelativeAltitude": 61.2,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": 93.3,
+          "GimbalPitchDegree": -89.9,
+          "FlightRollDegree": 13.1,
+          "FlightYawDegree": 87.3,
+          "FlightPitchDegree": -23.0,
+          "FlightXSpeed": -0.1,
+          "FlightYSpeed": 8.2,
+          "FlightZSpeed": 0.0
+        },
+        "north_from_first_m": -40.43393869034191,
+        "east_from_first_m": 53.199960360286
+      }
+    },
+    {
+      "id": 6,
+      "file": "images/DJI_0074.JPG",
+      "ned_m": [
+        0.08927173359565543,
+        22.268162892376065,
+        0.20000000000000018
+      ],
+      "yaw_rad": -1.5707963267948966,
+      "source_metadata": {
+        "file": "DJI_0074.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.039116972222224,
+        "longitude_deg": -82.69662088888889,
+        "exif_gps_altitude_m": -2.511,
+        "capture_time_original": "2017:04:30 12:01:48",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.51,
+          "RelativeAltitude": 61.1,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": -90.0,
+          "GimbalPitchDegree": -90.0,
+          "FlightRollDegree": -5.3,
+          "FlightYawDegree": -90.9,
+          "FlightPitchDegree": -8.4,
+          "FlightXSpeed": -0.1,
+          "FlightYSpeed": -10.9,
+          "FlightZSpeed": 0.0
+        },
+        "north_from_first_m": -9.979964159523416,
+        "east_from_first_m": 47.4314874026517
+      }
+    },
+    {
+      "id": 9,
+      "file": "images/DJI_0084.JPG",
+      "ned_m": [
+        32.205547512171464,
+        29.055404984908183,
+        0.10000000000000009
+      ],
+      "yaw_rad": 1.6091935703387719,
+      "source_metadata": {
+        "file": "DJI_0084.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.039406777777778,
+        "longitude_deg": -82.69655186111112,
+        "exif_gps_altitude_m": -2.411,
+        "capture_time_original": "2017:04:30 12:02:08",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.41,
+          "RelativeAltitude": 61.2,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": 92.2,
+          "GimbalPitchDegree": -90.0,
+          "FlightRollDegree": 11.3,
+          "FlightYawDegree": 87.4,
+          "FlightPitchDegree": -23.1,
+          "FlightXSpeed": 0.0,
+          "FlightYSpeed": 6.9,
+          "FlightZSpeed": 0.0
+        },
+        "north_from_first_m": 22.136311619052393,
+        "east_from_first_m": 54.218729495183815
+      }
+    },
+    {
+      "id": 8,
+      "file": "images/DJI_0082.JPG",
+      "ned_m": [
+        33.002836444308855,
+        5.129352374410896,
+        0.10000000000000009
+      ],
+      "yaw_rad": 1.610938899590766,
+      "source_metadata": {
+        "file": "DJI_0082.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.039413972222224,
+        "longitude_deg": -82.69679519444445,
+        "exif_gps_altitude_m": -2.411,
+        "capture_time_original": "2017:04:30 12:02:04",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.41,
+          "RelativeAltitude": 61.2,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": 92.3,
+          "GimbalPitchDegree": -89.9,
+          "FlightRollDegree": 11.3,
+          "FlightYawDegree": 87.8,
+          "FlightPitchDegree": -21.7,
+          "FlightXSpeed": -0.2,
+          "FlightYSpeed": 4.9,
+          "FlightZSpeed": 0.1
+        },
+        "north_from_first_m": 22.933600551189784,
+        "east_from_first_m": 30.29267688468653
+      }
+    },
+    {
+      "id": 7,
+      "file": "images/DJI_0079.JPG",
+      "ned_m": [
+        25.66408426777064,
+        -15.027527564253866,
+        0.30000000000000027
+      ],
+      "yaw_rad": 0.2984513020910304,
+      "source_metadata": {
+        "file": "DJI_0079.JPG",
+        "width": 4000,
+        "height": 3000,
+        "latitude_deg": 28.03934775,
+        "longitude_deg": -82.69700019444444,
+        "exif_gps_altitude_m": -2.611,
+        "capture_time_original": "2017:04:30 12:01:58",
+        "focal_length_mm": 3.61,
+        "focal_length_35mm_equiv": 20.0,
+        "dji_xmp": {
+          "AbsoluteAltitude": -2.61,
+          "RelativeAltitude": 61.0,
+          "GimbalRollDegree": 0.0,
+          "GimbalYawDegree": 17.1,
+          "GimbalPitchDegree": -89.9,
+          "FlightRollDegree": 11.2,
+          "FlightYawDegree": 19.8,
+          "FlightPitchDegree": 18.4,
+          "FlightXSpeed": 6.5,
+          "FlightYSpeed": 2.4,
+          "FlightZSpeed": -0.2
+        },
+        "north_from_first_m": 15.594848374651567,
+        "east_from_first_m": 10.135796946021767
+      }
+    }
+  ],
+  "source_dataset": "https://github.com/pierotofy/drone_dataset_sheffield_park_3",
+  "selection_note": "IDs denote curated spatial grid cells, not chronological acquisition. Original camera timestamps are retained in source_metadata.capture_time_original; timestamp_s is intentionally absent. NED values are derived from EXIF GPS, not a Pixhawk log."
+}

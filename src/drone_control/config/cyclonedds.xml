@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS tuning for the survey camera (multi-megabyte sensor_msgs/Image).
+
+  A 1280x960 rgb8 frame is 3.7 MB and travels as ~2,600 UDP fragments in one
+  burst.  With the Linux default socket receive buffer (net.core.rmem_max =
+  212992 bytes) the burst overflows, fragments are lost, and a best-effort
+  reader drops the whole frame - the symptom is "one image, then nothing".
+
+  This file asks CycloneDDS for up to a 10 MB receive buffer.  The kernel caps
+  it at net.core.rmem_max (observed: request 10 MB -> got 425984 bytes), so
+  raise that first (once, needs sudo):
+
+      sudo sysctl -w net.core.rmem_max=2147483647
+      sudo sysctl -w net.core.rmem_default=2147483647
+      # persistent:
+      echo -e "net.core.rmem_max=2147483647\nnet.core.rmem_default=2147483647" \
+        | sudo tee /etc/sysctl.d/60-ros2-dds.conf
+
+  then point every ROS shell at this file:
+
+      export CYCLONEDDS_URI=file://$HOME/drone_ws/install/drone_control/share/drone_control/config/cyclonedds.xml
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain Id="any">
+    <Internal>
+      <!-- "max" = try for this much, silently settle for what the kernel
+           allows.  Do NOT use "min": CycloneDDS 0.10 treats an
+           unsatisfiable minimum as fatal and every ROS node then fails
+           with "rmw_create_node: failed to create domain". -->
+      <SocketReceiveBufferSize max="10MB"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

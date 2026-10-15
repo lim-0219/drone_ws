@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "dataset_kind": "real",
+  "camera": {
+    "footprint_m": [5.0, 10.0],
+    "reference_agl_m": 5.0,
+    "image_top_yaw_offset_rad": 0.0
+  },
+  "grid": {"spacing_m": [2.5, 5.0]},
+  "images": [
+    {"id": 5, "file": "images/capture_01.png"},
+    {"id": 4, "file": "images/capture_02.png"},
+    {"id": 1, "file": "images/capture_03.png"},
+    {"id": 2, "file": "images/capture_04.png"},
+    {"id": 3, "file": "images/capture_05.png"},
+    {"id": 6, "file": "images/capture_06.png"},
+    {"id": 9, "file": "images/capture_07.png"},
+    {"id": 8, "file": "images/capture_08.png"},
+    {"id": 7, "file": "images/capture_09.png"}
+  ]
+}
+

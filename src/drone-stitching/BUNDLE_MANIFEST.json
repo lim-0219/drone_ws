@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "bundle_name": "drone-stitching-portable-2026-10-13",
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 67,
+      "sha256": "409366f8c2ee88dfd3bf362b02652fde1d5fc02224fe566d07c34b8b000a4144"
+    },
+    {
+      "path": "PORTABILITY_CHECK.md",
+      "bytes": 2824,
+      "sha256": "6c791949a32a23805fc0a12e279d31d62fc9a017601457abf2e476c959cc737a"
+    },
+    {
+      "path": "README.md",
+      "bytes": 17603,
+      "sha256": "58d44e1b85f4d8a26b93a4a14ee894495724f6008822a2cc3819ffb583f947b6"
+    },
+    {
+      "path": "START_HERE.md",
+      "bytes": 6958,
+      "sha256": "96a90ffa07067c04eb4fc8b53bb568007566b89967dd2938260e21d5fbf7af1e"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 1005,
+      "sha256": "055b1c0288abce0cda0c5c3dfb2a355820b6bc43a4916873f51cf241de3e75be"
+    },
+    {
+      "path": "VALIDATION.md",
+      "bytes": 6956,
+      "sha256": "f52746f6ebce200a459795208ff05053f9d25f9246f77b6e5328b476f4768310"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/LICENSE",
+      "bytes": 1319,
+      "sha256": "29b51eaacc4a934bc2e0dd1fa0cbf91edff6639bf71113c93e555504f2d0dd19"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/README.md",
+      "bytes": 5329,
+      "sha256": "8ec476cdc4b059f7b46c25b0964bd0ca6eb705ec156e709e79042cbfd27a45e8"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/capture_positions.png",
+      "bytes": 38428,
+      "sha256": "bfae1403fa7193350d51fe038ec4fe54e9441ca6a73c62a9b7ab4dd20129b2f0"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/config.json",
+      "bytes": 290,
+      "sha256": "b1058c5308d371b0990b245105fc62a297a19395d9454a194bc04b8bc1121634"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0062.JPG",
+      "bytes": 5834964,
+      "sha256": "3e3f1e3a8ec22628f855d598473c9798a557b564de845a9e497a1a40a861e022"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0063.JPG",
+      "bytes": 5728923,
+      "sha256": "d1f476a9cd6c0c802b9adb22c2add94604cf72d4857ccbd9cff7d4edef85da57"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0065.JPG",
+      "bytes": 5536898,
+      "sha256": "2952e5caf22b0cb5f3f2d38d8fc3eb559d4d190fa67d0f4620d195ca25369cc2"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0074.JPG",
+      "bytes": 5601369,
+      "sha256": "f2a03e368b00028204e162735a01a30d22ee289649ccb51a806e867cb3203708"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0075.JPG",
+      "bytes": 4943818,
+      "sha256": "f03e3a8cf0fcb5de38609f913d9c5cccabf20ddb0edab0085c34de35cf4d7098"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0076.JPG",
+      "bytes": 4987333,
+      "sha256": "16728761851f21123b5ec6f5dbf18324104a923090e4370d4af0e9e54cd91462"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0079.JPG",
+      "bytes": 5287268,
+      "sha256": "6aa7642ea4d916509f34c4b9ce2c44c1610cd80a8d64e6f203654ea86d65da17"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0082.JPG",
+      "bytes": 5003731,
+      "sha256": "2323fcefd8aa09dd5e508bdd00c7696aec50c11bd6e5bcbf63a20d2a30ff21a0"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/images/DJI_0084.JPG",
+      "bytes": 5131775,
+      "sha256": "ae2ca8b39c193b34fdcdc7af271974f4f08b4ed9d0cc364e17e33a62bc7edbd5"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/manifest.json",
+      "bytes": 10737,
+      "sha256": "0697a34afc1781d49cb70fbeb0de5e5f195f24f138b815f0fe5ee7bd516f4611"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/selected9_overview.jpg",
+      "bytes": 411196,
+      "sha256": "a7fffa7378a3af726bdab708d86ddbf62c0a61124acad89ac2c8e7e52877667b"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/selected_images_sha256.json",
+      "bytes": 2487,
+      "sha256": "9b89a28218ca8fad788b91054f15937795899e49f4a5b410348a0991473a264b"
+    },
+    {
+      "path": "datasets/sheffield_park_3/selected9/selected_metadata.csv",
+      "bytes": 1283,
+      "sha256": "992d3793f1a165a605f28275284d1915af2536ac45e7028b7eeaa3591d7978dd"
+    },
+    {
+      "path": "examples/config.json",
+      "bytes": 281,
+      "sha256": "424f8a2f55326932932f2fab4cf9d288145d766b622acc0d66b19c260002d3a3"
+    },
+    {
+      "path": "examples/manifest.json",
+      "bytes": 648,
+      "sha256": "8216ea8e0119f707413bd55ee7104aedffbd4a8c0a2b0af6305dca3908f21dc2"
+    },
+    {
+      "path": "examples/manifest_with_telemetry.json",
+      "bytes": 931,
+      "sha256": "45ea907ceee2e1ce5c3f865a022cb9de3b04cf5256d8b2b41c75c07c58e098b3"
+    },
+    {
+      "path": "examples/show_drone.py",
+      "bytes": 1034,
+      "sha256": "a0e2c875b4b1653cb19dc6423200b7e8a153f151e2ad3c17e8c75f946e8407a0"
+    },
+    {
+      "path": "examples/telemetry.csv",
+      "bytes": 307,
+      "sha256": "e150d47846995817f7d123214b19bad8b4951f12fd273b871054512af3e7e8a1"
+    },
+    {
+      "path": "pyproject.toml",
+      "bytes": 578,
+      "sha256": "e322818fcabe0374330d5469c9fd734ce87bfa510bc1291bcc2a6dc814a22476"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "bytes": 35,
+      "sha256": "6069ef4aea3b6a6d11cb7c4f85ca4a4620ad94bb864608488bce7a3c4023acea"
+    },
+    {
+      "path": "requirements.txt",
+      "bytes": 126,
+      "sha256": "b7eb5e3eddde8110c55ab84c6be082fe09b9f80188d89a8b95e6cc2cbc664926"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift/diagnostics.json",
+      "bytes": 26735,
+      "sha256": "393dce63f2e97e59bd9e80cf5e67f2dfbd776acfb5f1dbf84fe7765c3349ddfb"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/coverage.png",
+      "bytes": 63368,
+      "sha256": "30be31691bd550fcbe511d9764159cf94f902d53ed42b7440559d812abfc30dc"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/diagnostics.json",
+      "bytes": 26767,
+      "sha256": "eb266419d416e97ce420141b86313a2302f7a2eba80360eee8eeb3c8c3fab80a"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/map.png",
+      "bytes": 9440256,
+      "sha256": "8a9bf0cee8235d38316fce2938d03c9e83a912fda26ab9bc4e21a499e033a820"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/overview.png",
+      "bytes": 9671232,
+      "sha256": "7ef813ef1cf146179b01b950986fe9dcfd92cbbc452117a463458d639c508e6c"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/transforms.json",
+      "bytes": 38822,
+      "sha256": "602d24d1b435aef4098d1df05496bfc6ea6cb055e22e639daf4542fb5f76aacf"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/valid_mask.png",
+      "bytes": 22686,
+      "sha256": "fb9ebbad74bb2111596becc8321a8773e329c0495c00dd30d76bb8621c866a01"
+    },
+    {
+      "path": "runs/sheffield_selected9_sift_west/validation_summary.json",
+      "bytes": 3747,
+      "sha256": "e91cb4cddc0a6c55b002d93c0e46ac7f20292ff25bc68fad1ad3a229422cf925"
+    },
+    {
+      "path": "runs/verified_input/ground_truth.json",
+      "bytes": 5797,
+      "sha256": "e401647ce908d11aff5bd5ba8e2a9f1e3dd9173fc94e9bbc00c8bb6eebc95bfe"
+    },
+    {
+      "path": "runs/verified_input/ground_truth.png",
+      "bytes": 10612758,
+      "sha256": "a3aadacd7c4f7a911e137c485f688945caa448d7e02eea7ecd0a8de5b73b2078"
+    },
+    {
+      "path": "runs/verified_input/images/capture_01_id5.png",
+      "bytes": 577769,
+      "sha256": "e6ddd477cd10a863e4f11d92f2f814e06728aec6ea600ac855ca7bfe837e1c43"
+    },
+    {
+      "path": "runs/verified_input/images/capture_02_id4.png",
+      "bytes": 591119,
+      "sha256": "9113b2ca6a1cbc41b056c86a8b396ae2701bb0c35817c03de7716fb451f020f1"
+    },
+    {
+      "path": "runs/verified_input/images/capture_03_id1.png",
+      "bytes": 603661,
+      "sha256": "a8ff646fcc443f018302f5ea8827e778167e7c085f652a145753f57078ad3bb3"
+    },
+    {
+      "path": "runs/verified_input/images/capture_04_id2.png",
+      "bytes": 590152,
+      "sha256": "9121d169cef9e855d39b2273f33bb3758e5434bd7330a33628031f4215648342"
+    },
+    {
+      "path": "runs/verified_input/images/capture_05_id3.png",
+      "bytes": 588984,
+      "sha256": "8221e2843cd277b9dc573eb1eb37898b8e9446384284f57542e6b6c1152839f7"
+    },
+    {
+      "path": "runs/verified_input/images/capture_06_id6.png",
+      "bytes": 582255,
+      "sha256": "e523d2a085df98a4eaa27d6dafef53082fc8327d791fcd8bc09cbb4225188f53"
+    },
+    {
+      "path": "runs/verified_input/images/capture_07_id9.png",
+      "bytes": 584274,
+      "sha256": "73212b5c4430c56ca4d9753e350a1da0fc914ff5a8c4bcebd3351bc10edfc9ec"
+    },
+    {
+      "path": "runs/verified_input/images/capture_08_id8.png",
+      "bytes": 561944,
+      "sha256": "3c80334804357254c772b41323ed54f78a156a99a2a451cc9cc3d50b4949e0eb"
+    },
+    {
+      "path": "runs/verified_input/images/capture_09_id7.png",
+      "bytes": 586224,
+      "sha256": "efdeb31632a952606fa027894f2801fac4be9b3736ce197c1acf41b251d04ad1"
+    },
+    {
+      "path": "runs/verified_input/manifest.json",
+      "bytes": 1256,
+      "sha256": "1d827e5b330cc3dce776ff6d455acc94aa4bdc2c5226b5e5f8e656c062034a42"
+    },
+    {
+      "path": "runs/verified_input/manifest_no_metadata.json",
+      "bytes": 1155,
+      "sha256": "6703a10a8dc899d9a3e68e1cac2c2e4682bc39c31270e4fd67718eee692a1040"
+    },
+    {
+      "path": "runs/verified_input/telemetry.csv",
+      "bytes": 1742,
+      "sha256": "02baeaa66157f49682479e8f730193f185738e58e9149acc913cf781fba39ef8"
+    },
+    {
+      "path": "runs/verified_orb/coverage.png",
+      "bytes": 32694,
+      "sha256": "944ef937acfce2a59c3773ad7344f6078c3786da292c7d4220c712d0a7d9d173"
+    },
+    {
+      "path": "runs/verified_orb/diagnostics.json",
+      "bytes": 26146,
+      "sha256": "3fd94dba68bc61208d5a7192ff30a5a59e08927637da7915c212b83705f827cc"
+    },
+    {
+      "path": "runs/verified_orb/evaluation.json",
+      "bytes": 1016,
+      "sha256": "d50c35727cd148408bf54530b8f707fc73d3749cf4cbeea938720e0fd341eb5a"
+    },
+    {
+      "path": "runs/verified_orb/map.png",
+      "bytes": 3368508,
+      "sha256": "f1efe57464a1dab89e3e45e40e3951895437bcbcd8102e66cd68aa20050da4a5"
+    },
+    {
+      "path": "runs/verified_orb/overview.png",
+      "bytes": 3517820,
+      "sha256": "37bfb40c983c795a73b757b7e64c01a0b298836648a601c9d1faf7bf822a1a82"
+    },
+    {
+      "path": "runs/verified_orb/transforms.json",
+      "bytes": 24447,
+      "sha256": "5834f52e246110c7e7841758c9c454178fc071008dea2b7a13312f679f9d3d92"
+    },
+    {
+      "path": "runs/verified_orb/valid_mask.png",
+      "bytes": 13010,
+      "sha256": "cc7a8cb80848a9dbdc39afd5a1cc62056196bf419f6ab76b33f2db51858fe11c"
+    },
+    {
+      "path": "runs/verified_sift/coverage.png",
+      "bytes": 32753,
+      "sha256": "81fb428c0bf21be90d650fe6bf403b450046dee2f985379941d52de31057eac3"
+    },
+    {
+      "path": "runs/verified_sift/diagnostics.json",
+      "bytes": 26935,
+      "sha256": "a240c8f2f7aaa8d67f0eb3d489a6e40c72e657e92af66a688ccdc73646cb90e3"
+    },
+    {
+      "path": "runs/verified_sift/drone_position.png",
+      "bytes": 3377808,
+      "sha256": "d4d79321a46e625875eb6614285ced466538002f317dec16106958becf70a075"
+    },
+    {
+      "path": "runs/verified_sift/evaluation.json",
+      "bytes": 1038,
+      "sha256": "24c96b8ed79e50c5c0691c0efa1dc8f1c6df16e19a2ae77f60e2c5f3feacd78a"
+    },
+    {
+      "path": "runs/verified_sift/map.png",
+      "bytes": 3377774,
+      "sha256": "224af79fb97d91f6d4107a668f6222b2e63639a78a90368dcccc041b84f8af6f"
+    },
+    {
+      "path": "runs/verified_sift/overview.png",
+      "bytes": 3525535,
+      "sha256": "cb97e6899a1b1538b265794625b6edde537e4d9f8762f0588482f1fdbd20ba62"
+    },
+    {
+      "path": "runs/verified_sift/transforms.json",
+      "bytes": 31469,
+      "sha256": "d0dffae68e5b933fc86cc4a21deeaaa165e5860f7c4f6d97a72cb5166ff837cb"
+    },
+    {
+      "path": "runs/verified_sift/valid_mask.png",
+      "bytes": 13039,
+      "sha256": "d7b208724068e2871d94866577eabc1eaa7130546e6b00f4ecb4f2372ee7427e"
+    },
+    {
+      "path": "scripts/run_demo.py",
+      "bytes": 1900,
+      "sha256": "fc3e487f0fb6d172a5878bb2a73c0be14b514ff2953e1bbc1ffd9d5b3f5a146a"
+    },
+    {
+      "path": "scripts/setup_env.py",
+      "bytes": 1389,
+      "sha256": "62ae37061b1da85d9603806a0bdb553680fceac1e1075eaa4eb66386e1452f6f"
+    },
+    {
+      "path": "scripts/verify_bundle.py",
+      "bytes": 917,
+      "sha256": "e3daede9d6e2b6fed07166735e13ac43dc4df645f36b7111233f764d2ce2812d"
+    },
+    {
+      "path": "src/drone_stitch/__init__.py",
+      "bytes": 99,
+      "sha256": "c26f79c4bedf91da43a9b2c24095f5b3b13f582f91b5ed8d7dffd54e1445741d"
+    },
+    {
+      "path": "src/drone_stitch/__main__.py",
+      "bytes": 48,
+      "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
+    },
+    {
+      "path": "src/drone_stitch/cli.py",
+      "bytes": 3497,
+      "sha256": "a2f37c636f3901d8916ce4cbf80a2dfb0b8aaaac9853d87413e5548aeb62789f"
+    },
+    {
+      "path": "src/drone_stitch/config.py",
+      "bytes": 2785,
+      "sha256": "01ec6dcee00780d4e507c58447314332344cb533b07bad3716acaef5fc7f666f"
+    },
+    {
+      "path": "src/drone_stitch/coordinates.py",
+      "bytes": 2550,
+      "sha256": "a08d833a1eb9e8398e0f100ae449b006117ac4dfc6ab28bca38dec0f0d6daf44"
+    },
+    {
+      "path": "src/drone_stitch/features.py",
+      "bytes": 5109,
+      "sha256": "0f68164b05e9173061df4ce6931601ca24fca1bea9048e94f95cf17bad140d31"
+    },
+    {
+      "path": "src/drone_stitch/geometry.py",
+      "bytes": 3130,
+      "sha256": "c0ed4655d0af8ea0d17cd7b82d103f2643e802b9561d4ab0b56246e14d189ca7"
+    },
+    {
+      "path": "src/drone_stitch/inputs.py",
+      "bytes": 8310,
+      "sha256": "41ca852f3dac516284ed87773b8127691a437dc3c433aa72d5c3f75082f1ca7b"
+    },
+    {
+      "path": "src/drone_stitch/metadata.py",
+      "bytes": 3372,
+      "sha256": "9f029c0b79531d47b86a3c84b2d6b22c0bd2792fc0a1408c2b7a547f4fed35ae"
+    },
+    {
+      "path": "src/drone_stitch/optimize.py",
+      "bytes": 7003,
+      "sha256": "cff6b653d4c1ebd3eada7167e71b4a246577332d3554d6930cf5fd60fa76189b"
+    },
+    {
+      "path": "src/drone_stitch/pipeline.py",
+      "bytes": 7339,
+      "sha256": "5eed5764f7fcd97cfb02eae465ca6c54ac27707a1e574150eedb4555d7db0b1f"
+    },
+    {
+      "path": "src/drone_stitch/render.py",
+      "bytes": 3977,
+      "sha256": "fbc2763edef14ed05eef9280cc7c58af234a299572d3349fec0586a3ad082bb9"
+    },
+    {
+      "path": "src/drone_stitch/synthetic.py",
+      "bytes": 6229,
+      "sha256": "7cd45e30f9b2612fa616435e46cc70d6cf5953f4768b0752f3667e6f5438821e"
+    },
+    {
+      "path": "tests/test_geometry_metadata.py",
+      "bytes": 5518,
+      "sha256": "fc7935af5b47c4e5069016fc3b3fdc4892e1b7de2c750019881f1df6f34399bc"
+    },
+    {
+      "path": "tests/test_pipeline.py",
+      "bytes": 5219,
+      "sha256": "4715482469cd452a2cc765190fe7f1c684e1454a79b9afa8978159a0bd4d4624"
+    }
+  ]
+}

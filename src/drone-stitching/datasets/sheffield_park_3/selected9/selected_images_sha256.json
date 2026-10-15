@@ -1,0 +1,65 @@
+[
+  {
+    "id": 5,
+    "file": "images/DJI_0075.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0075.JPG",
+    "sha256": "f03e3a8cf0fcb5de38609f913d9c5cccabf20ddb0edab0085c34de35cf4d7098",
+    "bytes": 4943818
+  },
+  {
+    "id": 4,
+    "file": "images/DJI_0076.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0076.JPG",
+    "sha256": "16728761851f21123b5ec6f5dbf18324104a923090e4370d4af0e9e54cd91462",
+    "bytes": 4987333
+  },
+  {
+    "id": 1,
+    "file": "images/DJI_0062.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0062.JPG",
+    "sha256": "3e3f1e3a8ec22628f855d598473c9798a557b564de845a9e497a1a40a861e022",
+    "bytes": 5834964
+  },
+  {
+    "id": 2,
+    "file": "images/DJI_0063.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0063.JPG",
+    "sha256": "d1f476a9cd6c0c802b9adb22c2add94604cf72d4857ccbd9cff7d4edef85da57",
+    "bytes": 5728923
+  },
+  {
+    "id": 3,
+    "file": "images/DJI_0065.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0065.JPG",
+    "sha256": "2952e5caf22b0cb5f3f2d38d8fc3eb559d4d190fa67d0f4620d195ca25369cc2",
+    "bytes": 5536898
+  },
+  {
+    "id": 6,
+    "file": "images/DJI_0074.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0074.JPG",
+    "sha256": "f2a03e368b00028204e162735a01a30d22ee289649ccb51a806e867cb3203708",
+    "bytes": 5601369
+  },
+  {
+    "id": 9,
+    "file": "images/DJI_0084.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0084.JPG",
+    "sha256": "ae2ca8b39c193b34fdcdc7af271974f4f08b4ed9d0cc364e17e33a62bc7edbd5",
+    "bytes": 5131775
+  },
+  {
+    "id": 8,
+    "file": "images/DJI_0082.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0082.JPG",
+    "sha256": "2323fcefd8aa09dd5e508bdd00c7696aec50c11bd6e5bcbf63a20d2a30ff21a0",
+    "bytes": 5003731
+  },
+  {
+    "id": 7,
+    "file": "images/DJI_0079.JPG",
+    "source_url": "https://raw.githubusercontent.com/pierotofy/drone_dataset_sheffield_park_3/master/DJI_0079.JPG",
+    "sha256": "6aa7642ea4d916509f34c4b9ce2c44c1610cd80a8d64e6f203654ea86d65da17",
+    "bytes": 5287268
+  }
+]

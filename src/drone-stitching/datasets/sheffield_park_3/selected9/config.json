@@ -1,0 +1,13 @@
+{
+  "detector": "sift",
+  "nfeatures": 10000,
+  "feature_max_dimension": 2000,
+  "ratio_test": 0.75,
+  "ransac_threshold_px": 3.0,
+  "min_inliers": 18,
+  "diagonals": true,
+  "match_all": false,
+  "metadata_prior_sigma_m": 5.0,
+  "pixels_per_meter": 15.0,
+  "max_canvas_megapixels": 24.0
+}

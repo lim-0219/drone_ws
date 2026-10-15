@@ -1,0 +1,21 @@
+# Square path for drone_control/waypoint_navigator.
+#
+# Coordinate convention
+#   x        : metres North of the local origin (the takeoff pad in SITL)
+#   y        : metres East  of the local origin
+#   altitude : metres ABOVE the origin, always POSITIVE.
+#              The node negates it internally because PX4 uses NED, where the
+#              third axis points *down* (alt 5.0 -> NED z = -5.0).
+#   yaw      : degrees, NED convention. 0 = North, +90 = East, 180 = South,
+#              -90 = West.  Set `yaw_in_degrees:=false` to write radians.
+#   name     : optional label used in the log output.
+#
+# This path is a 10 m x 10 m square flown at 5 m, with the nose pointing along
+# the direction of travel, so it is easy to eyeball in Gazebo.
+
+waypoints:
+  - {name: 'above_home', x:  0.0, y:  0.0, altitude: 5.0, yaw:    0.0}
+  - {name: 'north_east', x: 10.0, y:  0.0, altitude: 5.0, yaw:    0.0}
+  - {name: 'corner_ne',  x: 10.0, y: 10.0, altitude: 5.0, yaw:   90.0}
+  - {name: 'corner_se',  x:  0.0, y: 10.0, altitude: 5.0, yaw:  180.0}
+  - {name: 'back_home',  x:  0.0, y:  0.0, altitude: 5.0, yaw:  -90.0}
