@@ -17,7 +17,8 @@ setup(
         # waypoint file resolve through the package share directory.
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'),
-            glob('config/*.yaml') + glob('config/*.rviz') + glob('config/*.xml')),
+            glob('config/*.yaml') + glob('config/*.rviz') + glob('config/*.xml')
+            + glob('config/*.json')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -35,6 +36,7 @@ setup(
             'waypoint_navigator = drone_control.waypoint_navigator:main',
             'rangefinder_params = drone_control.rangefinder_params:main',
             'check_range_fusion = drone_control.check_range_fusion:main',
+            'ground_station = drone_control.ground_station:main',
         ],
     },
 )

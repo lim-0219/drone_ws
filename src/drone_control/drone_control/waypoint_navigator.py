@@ -9,7 +9,13 @@ parameters) in PX4 offboard mode and then, depending on ``final_action``:
 * ``land``   - lands,
 * ``survey`` - hovers, takes one photo with the downward camera, then holds
   position while drawing the three laser beams and their ground triangle as
-  RViz markers (the beams are geometry only; nothing is simulated).
+  RViz markers (the beams are geometry only; nothing is simulated),
+* ``mosaic`` - treats the target as cell 5 of a 3x3 grid, visits the nine
+  cells in the order ``5 4 1 2 3 6 9 8 7`` the stitcher expects, photographs
+  each one and streams every photo to the ground station
+  (:mod:`drone_control.ground_station`) as a ``CapturedFrame`` the moment it
+  is taken.  The ground station builds the ``drone_stitch`` manifest and runs
+  the stitcher once all nine frames are in.
 
 Coordinate convention
 ---------------------
@@ -53,7 +59,7 @@ so that field is what makes the measurement count.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import json
 import math
@@ -61,6 +67,7 @@ import os
 import time
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
+from drone_control.image_io import image_to_pil
 from drone_control.laser_triangle import (
     Beam,
     EmitterLayout,
@@ -68,8 +75,8 @@ from drone_control.laser_triangle import (
     ned_to_enu,
     triangle_side,
 )
+from drone_control_msgs.msg import CapturedFrame
 from geometry_msgs.msg import Point, TransformStamped
-from PIL import Image as PilImage
 from px4_msgs.msg import (
     DistanceSensor,
     OffboardControlMode,
@@ -133,15 +140,12 @@ _NAV_STATE_NAMES = {
 _RANGE_DEVICE_ID = 0x52414E47  # 'RANG'
 _RANGE_VARIANCE = 0.01 * 0.01
 
-# How the PIL "raw" decoder should read each ROS image encoding:
-# (PIL mode, raw mode, bytes per pixel).
-_IMAGE_ENCODINGS = {
-    'rgb8': ('RGB', 'RGB', 3),
-    'bgr8': ('RGB', 'BGR', 3),
-    'rgba8': ('RGBA', 'RGBA', 4),
-    'bgra8': ('RGBA', 'BGRA', 4),
-    'mono8': ('L', 'L', 1),
-}
+# Capture order of the 3x3 mosaic grid - the order drone_stitch requires
+# (drone_stitch.geometry.CAPTURE_ORDER).  Cell layout, X right / Y up:
+#     7 8 9
+#     4 5 6
+#     1 2 3
+MOSAIC_CAPTURE_ORDER = (5, 4, 1, 2, 3, 6, 9, 8, 7)
 
 
 class NavState(Enum):
@@ -156,12 +160,17 @@ class NavState(Enum):
                               `reach_hold_time` seconds
     NAVIGATE   -> NAVIGATE  : current waypoint held within tolerance for
                               `reach_hold_time` seconds, waypoints remain
-    NAVIGATE   -> HOLD      : last waypoint reached AND final_action == 'hover'
-    NAVIGATE   -> LANDING   : last waypoint reached AND final_action == 'land'
-    NAVIGATE   -> CAPTURE   : last waypoint reached AND final_action == 'survey'
-    CAPTURE    -> LASER_HOLD: `capture_settle_time` elapsed AND a fresh camera
-                              image was saved to disk, OR `capture_timeout`
-                              elapsed without one (logged as a warning)
+    NAVIGATE   -> CAPTURE   : a waypoint flagged `capture` reached (the survey
+                              target, or every cell of the mosaic grid)
+    CAPTURE    -> NAVIGATE  : photo saved (or `capture_timeout` elapsed, with a
+                              warning) AND waypoints remain
+    CAPTURE    -> <final>   : photo saved / timed out AND it was the last
+                              waypoint - see "final" below
+    NAVIGATE   -> <final>   : last waypoint reached and it needs no capture
+    <final>                 : HOLD       if final_action == 'hover'
+                              LANDING    if final_action == 'land'
+                              LASER_HOLD if final_action == 'survey'
+                              HOLD or LANDING per `after_mosaic` if 'mosaic'
     LANDING    -> LANDED    : arming_state == DISARMED
     HOLD, LASER_HOLD, LANDED: terminal
     """
@@ -185,6 +194,9 @@ class Waypoint:
     z: float
     yaw: float
     name: str
+    capture: bool = False                       # take a photo here
+    grid_id: int = 0                            # 3x3 mosaic cell (1..9), 0 = none
+    grid_xy: Tuple[float, float] = (0.0, 0.0)   # cell position relative to cell 5, metres
 
     @property
     def altitude(self) -> float:
@@ -257,20 +269,54 @@ def load_waypoints(path: str, yaw_in_degrees: bool) -> List[Waypoint]:
     return [_parse_waypoint(i, entry, yaw_in_degrees) for i, entry in enumerate(entries)]
 
 
-def image_to_pil(image: Image) -> PilImage.Image:
-    """
-    Convert a ``sensor_msgs/Image`` to a PIL image without OpenCV or numpy.
+def grid_cell(grid_id: int) -> Tuple[int, int]:
+    """Return the (column, row) of a 3x3 cell, cell 5 at (0, 0) (drone_stitch GRID)."""
+    return (grid_id - 1) % 3 - 1, (grid_id - 1) // 3 - 1
 
-    (python3-opencv on this machine is built against numpy 1.x and fails to
-    import next to the numpy 2.x in ~/.local, and cv_bridge drags it in.)
+
+def camera_footprint(agl: float, hfov: float, width: int, height: int) -> Tuple[float, float]:
     """
-    try:
-        mode, raw_mode, bytes_per_pixel = _IMAGE_ENCODINGS[image.encoding.lower()]
-    except KeyError:
-        raise ValueError(f'unsupported image encoding "{image.encoding}"') from None
-    stride = int(image.step) or image.width * bytes_per_pixel
-    return PilImage.frombytes(
-        mode, (image.width, image.height), bytes(image.data), 'raw', raw_mode, stride, 1)
+    Compute the ground area seen by a nadir pinhole camera (along image u, along v).
+
+    u = 2 * agl * tan(hfov / 2); square pixels give v = u * height / width.
+    """
+    along_u = 2.0 * agl * math.tan(hfov / 2.0)
+    return along_u, along_u * height / width
+
+
+def mosaic_waypoints(centre: Waypoint, spacing: Tuple[float, float],
+                     heading: float) -> List[Waypoint]:
+    """
+    Build the nine capture waypoints of the mosaic in drone_stitch's capture order.
+
+    The grid lives in the stitcher's local frame: cell 5 is the origin,
+    X points along the image's right edge, Y along its top.  With the camera
+    mounted so that image top = body forward (image_top_yaw_offset_rad = 0)
+    the grid heading equals the vehicle yaw, and a cell at (X, Y) sits at::
+
+        dN = -sin(heading) * X + cos(heading) * Y
+        dE =  cos(heading) * X + sin(heading) * Y
+
+    which is the inverse of drone_stitch.geometry.ned_to_local_matrix, so the
+    stitcher's metadata-based initial placement reproduces exactly this grid.
+    Every waypoint keeps the centre altitude and the same yaw.
+    """
+    s, c = math.sin(heading), math.cos(heading)
+    waypoints = []
+    for grid_id in MOSAIC_CAPTURE_ORDER:
+        col, row = grid_cell(grid_id)
+        gx, gy = col * spacing[0], row * spacing[1]
+        waypoints.append(Waypoint(
+            x=centre.x - s * gx + c * gy,
+            y=centre.y + c * gx + s * gy,
+            z=centre.z,
+            yaw=heading,
+            name=f'grid{grid_id}',
+            capture=True,
+            grid_id=grid_id,
+            grid_xy=(gx, gy),
+        ))
+    return waypoints
 
 
 class WaypointNavigator(Node):
@@ -301,6 +347,15 @@ class WaypointNavigator(Node):
             DistanceSensor, self._topic(_TOPIC_DISTANCE_SENSOR), qos)
         self._marker_pub = self.create_publisher(MarkerArray, self._marker_topic, 10)
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
+        # Frames go to the ground station reliably and are kept (transient
+        # local, depth = frames per mission) so a ground station that starts
+        # late, or restarts, still receives every photo of the session.
+        self._frame_pub = self.create_publisher(
+            CapturedFrame, self._frame_topic,
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       history=HistoryPolicy.KEEP_LAST,
+                       depth=max(1, self._capture_total)))
 
         self.create_subscription(
             VehicleLocalPosition, self._topic(_TOPIC_VEHICLE_LOCAL_POSITION),
@@ -344,6 +399,7 @@ class WaypointNavigator(Node):
         self._land_command_sent = False
         self._capture_started: Optional[float] = None
         self._photo_path: Optional[str] = None
+        self._captures_done = 0
 
         self._handlers: Dict[NavState, Callable[[], None]] = {
             NavState.IDLE: self._run_idle,
@@ -370,6 +426,11 @@ class WaypointNavigator(Node):
                 f'photos -> {self._photo_dir} '
                 f'laser half-angle={math.degrees(self._laser_layout.half_angle):.1f}deg '
                 f'markers -> {self._marker_topic} ({self._marker_frame})')
+        if self._final_action == 'mosaic':
+            self.get_logger().info(
+                f'mosaic: session={self._session_id} {self._capture_total} cells, '
+                f'spacing X={self._mosaic_spacing[0]:.2f}m Y={self._mosaic_spacing[1]:.2f}m, '
+                f'frames -> {self._frame_topic}, after_mosaic={self._after_mosaic}')
 
         self._timer = self.create_timer(self._timer_period, self._on_timer)
 
@@ -396,6 +457,16 @@ class WaypointNavigator(Node):
         self.declare_parameter('camera_topic', '/survey/camera/image')
         self.declare_parameter('range_topic', '/survey/range/scan')
         self.declare_parameter('range_sensor_down_offset', 0.05)
+        # mosaic (final_action == 'mosaic'): 3x3 grid around the target
+        self.declare_parameter('mosaic_overlap', 0.5)
+        self.declare_parameter('mosaic_spacing_x', 0.0)
+        self.declare_parameter('mosaic_spacing_y', 0.0)
+        self.declare_parameter('camera_hfov_rad', 1.2)
+        self.declare_parameter('image_width', 1280)
+        self.declare_parameter('image_height', 960)
+        self.declare_parameter('after_mosaic', 'hover')
+        self.declare_parameter('frame_topic', '/survey/frames')
+        self.declare_parameter('session_id', '')
         # photo capture
         self.declare_parameter('photo_dir', '~/drone_survey_photos')
         self.declare_parameter('capture_settle_time', 2.0)
@@ -428,8 +499,12 @@ class WaypointNavigator(Node):
             raise ValueError('parameter "reach_hold_time" must be >= 0')
 
         self._final_action = str(self.get_parameter('final_action').value).strip().lower()
-        if self._final_action not in ('hover', 'land', 'survey'):
-            raise ValueError('parameter "final_action" must be "hover", "land" or "survey"')
+        if self._final_action not in ('hover', 'land', 'survey', 'mosaic'):
+            raise ValueError(
+                'parameter "final_action" must be "hover", "land", "survey" or "mosaic"')
+        self._after_mosaic = str(self.get_parameter('after_mosaic').value).strip().lower()
+        if self._after_mosaic not in ('hover', 'land'):
+            raise ValueError('parameter "after_mosaic" must be "hover" or "land"')
 
         self._warmup_required = int(self.get_parameter('setpoint_warmup_count').value)
         if self._warmup_required < 1:
@@ -442,23 +517,43 @@ class WaypointNavigator(Node):
         # negated here, exactly like the YAML altitude in _parse_waypoint().
         target_altitude = float(self.get_parameter('target_altitude').value)
         waypoint_file = str(self.get_parameter('waypoint_file').value)
-        if self._final_action == 'survey' and target_altitude > 0.0:
+        self._mosaic_spacing: Tuple[float, float] = (0.0, 0.0)
+        if self._final_action in ('survey', 'mosaic') and target_altitude > 0.0:
             target_yaw = float(self.get_parameter('target_yaw').value)
-            self._waypoints = [Waypoint(
+            target = Waypoint(
                 x=float(self.get_parameter('target_x').value),
                 y=float(self.get_parameter('target_y').value),
                 z=-target_altitude,  # positive-up altitude -> NED down
                 yaw=_wrap_pi(math.radians(target_yaw) if yaw_in_degrees else target_yaw),
                 name='survey_target',
-            )]
-            self._waypoint_source = 'target_x/target_y/target_altitude parameters'
+                capture=True,
+                grid_id=5,
+            )
+            if self._final_action == 'survey':
+                self._waypoints = [target]
+                self._waypoint_source = 'target_x/target_y/target_altitude parameters'
+            else:
+                self._mosaic_spacing = self._mosaic_grid_spacing(target_altitude)
+                self._waypoints = mosaic_waypoints(target, self._mosaic_spacing, target.yaw)
+                self._waypoint_source = '3x3 mosaic grid around target_x/target_y/target_altitude'
+        elif self._final_action == 'mosaic':
+            raise ValueError('final_action "mosaic" needs "target_altitude" > 0 with '
+                             '"target_x"/"target_y" (the grid is built around that point)')
         elif waypoint_file:
             self._waypoints = load_waypoints(waypoint_file, yaw_in_degrees)
             self._waypoint_source = waypoint_file
+            if self._final_action == 'survey':
+                # Survey at the last YAML waypoint.
+                self._waypoints[-1] = replace(self._waypoints[-1], capture=True, grid_id=5)
         else:
             raise ValueError(
                 'set parameter "waypoint_file" (path to the waypoint YAML), or for the survey '
                 'mission set "target_altitude" > 0 together with "target_x"/"target_y"')
+        self._capture_total = sum(1 for wp in self._waypoints if wp.capture)
+
+        self._frame_topic = str(self.get_parameter('frame_topic').value)
+        self._session_id = str(self.get_parameter('session_id').value).strip() or \
+            time.strftime('session_%Y%m%dT%H%M%SZ', time.gmtime())
 
         self._camera_topic = str(self.get_parameter('camera_topic').value)
         self._range_topic = str(self.get_parameter('range_topic').value)
@@ -484,6 +579,23 @@ class WaypointNavigator(Node):
         self._marker_frame = str(self.get_parameter('marker_frame').value)
         self._body_frame = str(self.get_parameter('body_frame').value)
         self._publish_tf = bool(self.get_parameter('publish_tf').value)
+
+    def _mosaic_grid_spacing(self, altitude: float) -> Tuple[float, float]:
+        """Grid step: explicit `mosaic_spacing_x/y`, else footprint * (1 - overlap)."""
+        override = (float(self.get_parameter('mosaic_spacing_x').value),
+                    float(self.get_parameter('mosaic_spacing_y').value))
+        if all(v > 0.0 for v in override):
+            return override
+        overlap = float(self.get_parameter('mosaic_overlap').value)
+        if not 0.0 <= overlap < 1.0:
+            raise ValueError('"mosaic_overlap" must be in [0, 1)')
+        hfov = float(self.get_parameter('camera_hfov_rad').value)
+        width = int(self.get_parameter('image_width').value)
+        height = int(self.get_parameter('image_height').value)
+        if not 0.0 < hfov < math.pi or width <= 0 or height <= 0:
+            raise ValueError('"camera_hfov_rad" must be in (0, pi) and image size positive')
+        along_u, along_v = camera_footprint(altitude, hfov, width, height)
+        return along_u * (1.0 - overlap), along_v * (1.0 - overlap)
 
     def _topic(self, relative_name: str) -> str:
         """Prefix a relative PX4 topic with the configured namespace."""
@@ -685,13 +797,14 @@ class WaypointNavigator(Node):
             return self._raw_range + self._range_down_offset, 'raw range'
         return None
 
-    def _save_photo(self, image: Image, pose: Waypoint) -> str:
+    def _save_photo(self, image: Image, pose: Waypoint, target: Waypoint) -> str:
         """Write the image as PNG plus a JSON sidecar; return the PNG path."""
         pil = image_to_pil(image)
         stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
         base = os.path.join(
             self._photo_dir,
-            f'survey_{stamp}_N{pose.x:+.2f}_E{pose.y:+.2f}_alt{pose.altitude:.2f}')
+            f'{self._session_id}_{stamp}_seq{self._captures_done + 1:02d}_id{target.grid_id}'
+            f'_N{pose.x:+.2f}_E{pose.y:+.2f}_alt{pose.altitude:.2f}')
         png_path = base + '.png'
         pil.save(png_path)
 
@@ -718,12 +831,39 @@ class WaypointNavigator(Node):
             },
             'height_above_ground_m': None if agl is None else agl[0],
             'height_above_ground_source': None if agl is None else agl[1],
-            'target': self._waypoints[-1].describe(),
+            'session_id': self._session_id,
+            'sequence': self._captures_done + 1,
+            'grid_id': target.grid_id,
+            'grid_local_xy_m': list(target.grid_xy),
+            'target': target.describe(),
             'state': self._state.value,
         }
         with open(base + '.json', 'w') as handle:
             json.dump(metadata, handle, indent=2)
         return png_path
+
+    def _publish_frame(self, image: Image, pose: Waypoint, target: Waypoint) -> None:
+        """Hand the photo and its pose to the ground station."""
+        agl = self._current_agl()
+        msg = CapturedFrame()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self._session_id
+        msg.session_id = self._session_id
+        msg.sequence = self._captures_done
+        msg.grid_id = target.grid_id
+        msg.total = self._capture_total
+        msg.timestamp_s = self._now_seconds()
+        msg.ned_m = [float(pose.x), float(pose.y), float(pose.z)]
+        msg.yaw_rad = float(pose.yaw)
+        msg.agl_valid = agl is not None
+        msg.agl_m = float(agl[0]) if agl is not None else 0.0
+        msg.agl_source = agl[1] if agl is not None else ''
+        msg.grid_local_xy_m = [float(target.grid_xy[0]), float(target.grid_xy[1])]
+        msg.grid_spacing_m = [float(self._mosaic_spacing[0]), float(self._mosaic_spacing[1])]
+        msg.image = image
+        self._frame_pub.publish(msg)
+        self.get_logger().info(
+            f'Frame {msg.sequence}/{msg.total} (cell {msg.grid_id}) sent to {self._frame_topic}')
 
     def _publish_laser_markers(self, beams: List[Beam], agl: float, source: str) -> None:
         """Draw the three beams, their ground spots and the ground triangle."""
@@ -897,18 +1037,38 @@ class WaypointNavigator(Node):
             f'Reached waypoint {self._waypoint_index + 1}/{len(self._waypoints)}: '
             f'{target.describe()}')
 
+        if target.capture:
+            self._capture_started = self._now_seconds()
+            self._transition(NavState.CAPTURE, f'photo requested at {target.name}')
+            return
+
+        self._advance_or_finish()
+
+    def _advance_or_finish(self) -> None:
+        """Head for the next waypoint, or run the final action after the last one."""
         if self._waypoint_index + 1 < len(self._waypoints):
             self._waypoint_index += 1
             self._inside_tolerance_since = None
             nxt = self._waypoints[self._waypoint_index]
             self.get_logger().info(f'Heading to {nxt.describe()}')
+            if self._state is not NavState.NAVIGATE:
+                self._transition(NavState.NAVIGATE, 'next waypoint')
             return
+        self._finish_mission()
 
+    def _finish_mission(self) -> None:
+        """Dispatch on final_action once every waypoint (and photo) is done."""
         if self._final_action == 'land':
             self._transition(NavState.LANDING, 'last waypoint reached, final_action=land')
         elif self._final_action == 'survey':
-            self._capture_started = self._now_seconds()
-            self._transition(NavState.CAPTURE, 'last waypoint reached, final_action=survey')
+            self._transition(NavState.LASER_HOLD, 'survey photo done, final_action=survey')
+        elif self._final_action == 'mosaic':
+            reason = (f'{self._captures_done}/{self._capture_total} frames captured, '
+                      f'after_mosaic={self._after_mosaic}')
+            if self._after_mosaic == 'land':
+                self._transition(NavState.LANDING, reason)
+            else:
+                self._transition(NavState.HOLD, reason)
         else:
             self._transition(NavState.HOLD, 'last waypoint reached, final_action=hover')
 
@@ -921,8 +1081,8 @@ class WaypointNavigator(Node):
             f'Holding hover at {target.describe()}', throttle_duration_sec=10.0)
 
     def _run_capture(self) -> None:
-        """Hover, let the vehicle settle, then save one camera frame to disk."""
-        target = self._waypoints[-1]
+        """Hover at the current waypoint, settle, save one frame and send it onwards."""
+        target = self._waypoints[self._waypoint_index]
         self._publish_trajectory_setpoint(target)
         self._check_still_offboard()
 
@@ -932,7 +1092,7 @@ class WaypointNavigator(Node):
         if elapsed < self._capture_settle_time:
             return
 
-        # The photo must show the vehicle *at the target*: accept the first
+        # The photo must show the vehicle *at the waypoint*: accept the first
         # frame received after the settle period, however slowly the
         # (possibly software-rendered) camera delivers frames.
         ready_since = self._capture_started + self._capture_settle_time
@@ -940,20 +1100,23 @@ class WaypointNavigator(Node):
                 and self._latest_image_time >= ready_since:
             pose = self._current_position() or target
             try:
-                self._photo_path = self._save_photo(self._latest_image, pose)
+                self._photo_path = self._save_photo(self._latest_image, pose, target)
             except (OSError, ValueError) as error:
-                self.get_logger().error(f'Failed to save photo: {error}')
-                self._transition(NavState.LASER_HOLD, 'photo capture failed')
+                self.get_logger().error(f'Failed to save photo at {target.name}: {error}')
+                self._advance_or_finish()
                 return
-            self.get_logger().info(f'Photo saved: {self._photo_path}')
-            self._transition(NavState.LASER_HOLD, 'photo captured')
+            self._captures_done += 1
+            self.get_logger().info(
+                f'Photo {self._captures_done}/{self._capture_total} saved: {self._photo_path}')
+            self._publish_frame(self._latest_image, pose, target)
+            self._advance_or_finish()
             return
 
         if elapsed >= self._capture_timeout:
             self.get_logger().warn(
-                f'No image taken at the target within {self._capture_timeout:.0f}s '
+                f'No image taken at {target.name} within {self._capture_timeout:.0f}s '
                 f'({self._camera_status()}); continuing without a photo')
-            self._transition(NavState.LASER_HOLD, 'capture timed out')
+            self._advance_or_finish()
             return
 
         self.get_logger().warn(

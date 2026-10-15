@@ -9,6 +9,10 @@ One node, `waypoint_navigator`, does both jobs:
 * **Survey mission** - fly to one target, hover, take a photo with a downward
   camera, then hold position while drawing three laser beams and the
   equilateral triangle they would project on the ground as RViz markers.
+* **Mosaic mission** - fly to the reported point, photograph a 3x3 grid around
+  it (nine frames, each streamed to the ground station the moment it is
+  taken) and stitch them into one map with the inherited `drone-stitching`
+  project. See *Mosaic mission* below.
 
 ---
 
@@ -128,10 +132,16 @@ shipped `config/square_waypoints.yaml` is a 10 m square at 5 m, installed to
 ## State machine
 
 ```
-IDLE ──► TAKEOFF ──► NAVIGATE ──┬──► HOLD                         (final_action: hover)
-                                ├──► LANDING ──► LANDED           (final_action: land)
-                                └──► CAPTURE ──► LASER_HOLD       (final_action: survey)
+IDLE ──► TAKEOFF ──► NAVIGATE ──┬──► HOLD                          (final_action: hover)
+                       ▲        ├──► LANDING ──► LANDED            (final_action: land)
+                       │        └──► CAPTURE ─┬─► LASER_HOLD       (final_action: survey)
+                       └──────────────────────┘  more capture waypoints (mosaic: 9 cells)
+                                                 └─► HOLD / LANDING (mosaic: after_mosaic)
 ```
+
+Every waypoint carries a `capture` flag. `NAVIGATE` hands a flagged waypoint to
+`CAPTURE`; after the photo `CAPTURE` goes back to `NAVIGATE` while waypoints
+remain, otherwise to the final action.
 
 | State | What it does | Exit condition |
 |-------|--------------|----------------|
@@ -139,7 +149,7 @@ IDLE ──► TAKEOFF ──► NAVIGATE ──┬──► HOLD               
 | `TAKEOFF` | Climbs **vertically**: keeps the current x/y, targets the first waypoint's altitude and yaw | target held within `position_tolerance` for `reach_hold_time` |
 | `NAVIGATE` | Commands the current waypoint; advances on arrival | last waypoint reached |
 | `HOLD` | Hovers at the last waypoint | terminal |
-| `CAPTURE` | Hovers, waits `capture_settle_time`, saves one camera frame (PNG + JSON) | photo saved, or `capture_timeout` elapsed (warning) |
+| `CAPTURE` | Hovers, waits `capture_settle_time`, saves one camera frame (PNG + JSON) and publishes it as a `CapturedFrame` | photo saved, or `capture_timeout` elapsed (warning) -> next waypoint or final action |
 | `LASER_HOLD` | Hovers and publishes the laser beam / ground triangle markers | terminal |
 | `LANDING` | Sends `VEHICLE_CMD_NAV_LAND` once and **stops** the offboard heartbeat so PX4 keeps AUTO_LAND | `arming_state == DISARMED` |
 | `LANDED` | Terminal | - |
@@ -159,13 +169,20 @@ reached when the 3D distance stays within `position_tolerance` continuously for
 | `timer_period` | double | `0.1` | Setpoint period, seconds (0.1 = 10 Hz) |
 | `position_tolerance` | double | `0.3` | Arrival radius, metres |
 | `reach_hold_time` | double | `1.0` | Dwell inside the tolerance before "reached" |
-| `final_action` | string | `hover` | `hover`, `land` or `survey` |
+| `final_action` | string | `hover` | `hover`, `land`, `survey` or `mosaic` |
 | `setpoint_warmup_count` | int | `20` | Setpoints streamed before OFFBOARD + ARM |
 | `yaw_in_degrees` | bool | `true` | Units of YAML `yaw` and `target_yaw` |
 | **Survey target** | | | *used when `final_action=survey` and `target_altitude > 0`; otherwise the survey happens at the last YAML waypoint* |
 | `target_x`, `target_y` | double | `0.0` | Target North / East, metres (NED) |
 | `target_altitude` | double | `0.0` | Target altitude above the origin, metres, **positive-up** |
-| `target_yaw` | double | `0.0` | Heading at the target |
+| `target_yaw` | double | `0.0` | Heading at the target (mosaic: held for the whole grid; grid +Y points this way) |
+| **Mosaic** | | | *`final_action=mosaic`; the target is grid cell 5* |
+| `mosaic_overlap` | double | `0.5` | Footprint fraction shared by neighbouring cells |
+| `mosaic_spacing_x`, `mosaic_spacing_y` | double | `0.0` | Explicit grid step (m) along image right / top; 0 = `footprint * (1 - overlap)` |
+| `camera_hfov_rad`, `image_width`, `image_height` | double, int, int | `1.2`, `1280`, `960` | Camera model used for the footprint (= the SDF) |
+| `after_mosaic` | string | `hover` | `hover` or `land` after the ninth frame |
+| `frame_topic` | string | `/survey/frames` | `drone_control_msgs/CapturedFrame` to the ground station |
+| `session_id` | string | `''` | Session name; empty = `session_<UTC time>` |
 | **Sensors** | | | |
 | `camera_topic` | string | `/survey/camera/image` | Bridged `sensor_msgs/Image` |
 | `range_topic` | string | `/survey/range/scan` | Bridged `sensor_msgs/LaserScan` (1 beam) |
@@ -358,12 +375,190 @@ length.
 
 ---
 
+## Mosaic mission: nine frames -> one map
+
+### What happens
+
+```
+drone (waypoint_navigator, final_action=mosaic)        ground PC (ground_station)
+─────────────────────────────────────────────          ──────────────────────────────────────
+fly to target = grid cell 5                            for every CapturedFrame:
+visit cells in order 5 4 1 2 3 6 9 8 7:                  images/capture_NN_idK.png  (saved at once)
+  settle, photo, publish CapturedFrame ───────────▶      manifest.json rewritten (stitcher input)
+  (image + NED, yaw, AGL, timestamp, cell)             9th frame in:
+after_mosaic: hover | land                               .venv/bin/python -m drone_stitch stitch ...
+                                                         map.png -> /survey/mosaic/map (RViz)
+```
+
+The stitcher (`src/drone-stitching`, package `drone_stitch`) is used
+unmodified, as an external tool in its own virtualenv. Its contract, read
+from its code: nine images in exactly that order, a `manifest.json` with the
+camera footprint and optional per-image `ned_m` / `yaw_rad` / `agl_m` /
+`timestamp_s`, output into a new, empty directory, exit code 2 on failure
+with `diagnostics.json`.
+
+### The grid
+
+The stitcher's local frame has image 5 at the origin, X along the image's
+right edge and Y along its top, and relates it to NED through
+`grid.heading_rad` = `yaw_5 + image_top_yaw_offset_rad`
+(`drone_stitch.geometry.ned_to_local_matrix`). The navigator lays the grid out
+with the inverse of that matrix (`mosaic_waypoints()`), so the stitcher's
+metadata-based initial placement reproduces the flight pattern exactly:
+
+```
+dN = -sin(yaw) * X + cos(yaw) * Y
+dE =  cos(yaw) * X + sin(yaw) * Y
+```
+
+Cell step = camera footprint x (1 - `mosaic_overlap`). With the survey camera
+(`horizontal_fov` 1.2 rad, 1280x960) at 5 m the footprint is 6.84 x 5.13 m, so
+the default 50 % overlap gives a 3.42 x 2.57 m step and a mosaic of roughly
+13.7 x 10.3 m. The yaw is held constant over the whole grid.
+
+**Camera orientation assumption.** The camera link is pitched +90 deg about
+body y, so by Gazebo's camera convention (optical axis +x, image right = -y,
+image down = -z of the sensor frame) image top = body forward and image right
+= body right, i.e. `image_top_yaw_offset_rad = 0`. This was derived, not
+measured. Verify once in SITL: fly north (`target_yaw:=0`) and a ground
+feature must move *down* the image as the drone moves; if the stitched
+`overview.png` shows the nine outlines rotated 90 or 180 deg from the flown
+grid, set `image_top_yaw_offset_rad` on the ground station accordingly.
+
+### Message: `drone_control_msgs/CapturedFrame`
+
+| Field | Content |
+|-------|---------|
+| `session_id` | one mission run; also the stitcher's `ned_frame_id` (one EKF session) |
+| `sequence`, `grid_id`, `total` | 1..9, cell id, frames expected |
+| `timestamp_s` | capture time (ROS clock), strictly increasing |
+| `ned_m`, `yaw_rad` | PX4 local position / heading at capture |
+| `agl_m`, `agl_valid`, `agl_source` | range-finder height (`dist_bottom` or raw range) |
+| `grid_local_xy_m`, `grid_spacing_m` | commanded cell position and step |
+| `image` | the photo (`sensor_msgs/Image`, rgb8) |
+
+QoS: RELIABLE + TRANSIENT_LOCAL, depth 9 on both ends, so a ground station
+that starts late or restarts still receives every frame of the session (and
+large images are not dropped - see *Large camera images over DDS*).
+
+### Ground station (`ros2 run drone_control ground_station`)
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `frame_topic` | `/survey/frames` | input |
+| `output_root` | `~/drone_survey_sessions` | one folder per session |
+| `stitch_project_dir` | `~/drone_ws/src/drone-stitching` | the checkout; `.venv/bin/python` inside it runs the stitcher |
+| `stitch_python`, `stitch_config` | derived | interpreter / config (`config/stitch_config.json`: SIFT, 100 px/m) |
+| `auto_stitch`, `stitch_timeout_s` | `true`, `600` | stitch when the 9th frame arrives |
+| `camera_hfov_rad` | `1.2` | footprint + ideal pinhole `K` written into the manifest |
+| `image_top_yaw_offset_rad` | `0.0` | see the orientation note above |
+| `fallback_agl_m` | `5.0` | reference AGL if cell 5 had no valid range reading |
+| `map_topic`, `overview_topic` | `/survey/mosaic/map`, `/survey/mosaic/overview` | results for RViz (latched) |
+
+Session folder:
+
+```
+~/drone_survey_sessions/session_20261016T091500Z/
+  images/capture_01_id5.png ... capture_09_id7.png
+  manifest.json        stitcher input, valid after every frame
+  frames.json          raw per-frame metadata as received
+  stitch_01/           map.png overview.png valid_mask.png coverage.png transforms.json diagnostics.json
+  stitch_result.json   status, elapsed time, diagnostics summary
+```
+
+The manifest's `camera` block is computed from the image size and
+`camera_hfov_rad`: `footprint_m = [W*h/fx, H*h/fx]` with
+`fx = (W/2)/tan(hfov/2)` and `h` = the range-finder AGL of cell 5; `K` with
+zero distortion is included so the stitcher's nadir anchor is the principal
+point. `grid.heading_rad` is deliberately omitted so the stitcher derives it
+from cell 5's yaw - the same convention the navigator used.
+
+Re-stitch a session by hand (different detector, config, ...):
+
+```bash
+cd ~/drone_ws/src/drone-stitching
+env -u PYTHONPATH .venv/bin/python -m drone_stitch stitch \
+    ~/drone_survey_sessions/<session>/manifest.json \
+    --output ~/drone_survey_sessions/<session>/stitch_02 --detector orb
+```
+
+`env -u PYTHONPATH` matters: a shell with the ROS environment sourced leaks
+`/opt/ros/humble/...` into the venv, pytest then loads ROS's `launch_testing`
+plugin and fails on a missing `yaml`. The ground station drops `PYTHONPATH`
+for the same reason. The stitcher's own suite: `env -u PYTHONPATH
+.venv/bin/python -m pytest -q` -> 27 passed on this machine.
+
+### Stitcher environment (once)
+
+```bash
+cd ~/drone_ws/src/drone-stitching
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip install --no-deps -e .
+```
+
+(That is its README procedure; `.venv/` is git-ignored there. A
+`COLCON_IGNORE` file keeps colcon from trying to build the pip project.)
+
+### Running the mosaic mission
+
+Terminals 1-3 exactly as for the survey mission (agent, `make px4_sitl
+gz_x500_survey`, QGroundControl), then:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/drone_ws/install/setup.bash
+export CYCLONEDDS_URI=file://$HOME/drone_ws/install/drone_control/share/drone_control/config/cyclonedds.xml
+
+ros2 launch drone_control mosaic_mission.launch.py \
+    target_x:=5.0 target_y:=0.0 target_altitude:=5.0 target_yaw:=0.0 mosaic_overlap:=0.5
+```
+
+Expected log (abridged):
+
+```
+[waypoint_navigator] mosaic: session=session_... 9 cells, spacing X=3.42m Y=2.57m, frames -> /survey/frames
+[ground_station]     listening on /survey/frames; sessions -> /home/.../drone_survey_sessions
+[waypoint_navigator] STATE NAVIGATE -> CAPTURE (photo requested at grid5)
+[waypoint_navigator] Photo 1/9 saved: ...   Frame 1/9 (cell 5) sent to /survey/frames
+[ground_station]     session_...: frame 1/9 (cell 5) saved N=5.00 E=0.00 yaw=0.0deg agl=5.00m
+...
+[waypoint_navigator] STATE CAPTURE -> HOLD (9/9 frames captured, after_mosaic=hover)
+[ground_station]     session_...: stitching -> .../stitch_01
+[ground_station]     session_...: stitch OK in 9.1s -> .../stitch_01/map.png [1370, 1030] px, valid 93%
+```
+
+RViz (`config/mosaic.rviz`) shows the live camera, the stitched map and the
+overview with the nine outlines. To run the ground station on another PC:
+same `ROS_DOMAIN_ID`/RMW, `ros2 run drone_control ground_station` there, and
+`ground_station:=false` in the launch here.
+
+### Verified without SITL
+
+* The ground station was fed the stitcher's own synthetic nine frames (with
+  their exact NED/yaw/AGL) as `CapturedFrame` messages; it wrote the manifest,
+  ran the real stitcher in the venv (8.3 s, 20/20 overlap constraints,
+  1062x2009 px) and the result scored RMSE 0.0003 m / max 0.0012 m against the
+  synthetic ground truth - the same bar as the stitcher's own test.
+* Navigator offline test: nine capture waypoints in the stitcher's order,
+  the NED cell positions for a 90 deg heading, the state sequence
+  `(NAVIGATE, CAPTURE) x 9 -> HOLD`, nine frames with correct sequence, cell,
+  pose, AGL and spacing.
+
+Not yet verified: the real Gazebo camera orientation (see the assumption
+above) and the stitcher's behaviour on the Gazebo ground texture - the
+default world is a fairly uniform plane; if SIFT finds too few features the
+stitch fails with `diagnostics.json` listing the rejected pairs. Fly over a
+textured area (or add ground objects to the world) for a meaningful mosaic.
+
+---
+
 ## Build
 
 ```bash
 cd ~/drone_ws
 source /opt/ros/humble/setup.bash
-colcon build --packages-select drone_control      # the package only
+colcon build --packages-select drone_control_msgs drone_control   # the two packages
 colcon build                                       # everything, incl. ros_gz_bridge (Harmonic)
 source install/setup.bash
 ```
