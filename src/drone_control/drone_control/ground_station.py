@@ -205,6 +205,7 @@ class GroundStation(Node):
         if msg.grid_spacing_m[0] > 0.0 and msg.grid_spacing_m[1] > 0.0:
             session.grid_spacing = (float(msg.grid_spacing_m[0]), float(msg.grid_spacing_m[1]))
 
+        agl, agl_source = self._plausible_agl(msg)
         session.frames[int(msg.sequence)] = {
             'sequence': int(msg.sequence),
             'grid_id': int(msg.grid_id),
@@ -212,8 +213,9 @@ class GroundStation(Node):
             'timestamp_s': float(msg.timestamp_s),
             'ned_m': [float(v) for v in msg.ned_m],
             'yaw_rad': float(msg.yaw_rad),
-            'agl_m': float(msg.agl_m) if msg.agl_valid else None,
-            'agl_source': msg.agl_source,
+            'agl_m': agl,
+            'agl_source': agl_source,
+            'agl_reported_m': float(msg.agl_m) if msg.agl_valid else None,
             'grid_local_xy_m': [float(v) for v in msg.grid_local_xy_m],
             'received_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'image': {'width': msg.image.width, 'height': msg.image.height,
@@ -232,6 +234,31 @@ class GroundStation(Node):
             self.get_logger().error(
                 f'{msg.session_id}: last frame arrived but frames {session.missing()} are '
                 f'missing; not stitching')
+
+    def _plausible_agl(self, msg: CapturedFrame) -> Tuple[Optional[float], str]:
+        """
+        Height above ground to put in the manifest, and where it came from.
+
+        The frame's range-finder AGL scales that image's footprint, so one bad
+        reading (a sensor seeing part of the airframe, a dropout) shrinks the
+        image 20x and the stitch fails with "implausible footprint scale".
+        Over the flat SITL ground the altitude above the takeoff pad (-z) is
+        the same quantity, so a reading that disagrees with it by more than
+        2x is replaced by -z and reported.  Real terrain can legitimately
+        differ from -z; widen or drop this check there.
+        """
+        altitude = -float(msg.ned_m[2])
+        reported = float(msg.agl_m) if msg.agl_valid else None
+        if reported is not None and reported > 0.0 and (
+                altitude <= 0.0 or 0.5 <= reported / altitude <= 2.0):
+            return reported, msg.agl_source
+        if altitude > 0.0:
+            self.get_logger().warn(
+                f'{msg.session_id}: frame {msg.sequence} range AGL '
+                f'{"invalid" if reported is None else f"{reported:.2f} m"} is implausible '
+                f'against altitude {altitude:.2f} m above the pad; using the altitude')
+            return altitude, 'altitude_above_origin'
+        return None, 'unknown'
 
     # ------------------------------------------------------------------
     # manifest

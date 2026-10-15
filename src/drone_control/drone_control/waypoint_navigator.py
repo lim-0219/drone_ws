@@ -864,6 +864,11 @@ class WaypointNavigator(Node):
         self._frame_pub.publish(msg)
         self.get_logger().info(
             f'Frame {msg.sequence}/{msg.total} (cell {msg.grid_id}) sent to {self._frame_topic}')
+        altitude = -float(pose.z)
+        if agl is not None and altitude > 0.5 and not 0.5 <= agl[0] / altitude <= 2.0:
+            self.get_logger().warn(
+                f'range AGL {agl[0]:.2f} m ({agl[1]}) disagrees with altitude {altitude:.2f} m: '
+                f'is something under the range finder?')
 
     def _publish_laser_markers(self, beams: List[Beam], agl: float, source: str) -> None:
         """Draw the three beams, their ground spots and the ground triangle."""

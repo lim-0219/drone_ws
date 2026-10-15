@@ -214,7 +214,7 @@ or `survey_mission.launch.py` (survey mission).
 
 | Link | Sensor / role | Pose (body, SDF frame: x fwd, y left, z up) |
 |------|---------------|---------------------------------------------|
-| `survey_camera_link` | `camera`, 1280x960 RGB, 5 Hz, topic `/survey/camera/image` | 6 cm below origin, pitched +90 deg (looks down) |
+| `survey_camera_link` | `camera`, 1280x960 RGB, 5 Hz, topic `/survey/camera/image` | 20 cm below origin (just above the skids, which otherwise show at the image edges), pitched +90 deg (looks down) |
 | `survey_range_link` | `gpu_lidar` 1x1 beam, 0.1-60 m, 30 Hz, topic `/survey/range/scan` | 5 cm below origin, pitched +90 deg |
 | `laser_emitter_{0,1,2}_link` | geometry only, red stub visual | radius 8 cm, 3 cm below origin, azimuth k*120 deg, beam (+x) tilted 15 deg from nadir |
 
@@ -500,10 +500,53 @@ python3 -m venv .venv
 (That is its README procedure; `.venv/` is git-ignored there. A
 `COLCON_IGNORE` file keeps colcon from trying to build the pip project.)
 
+### Textured ground world (required for stitching)
+
+The stock `default` world has a uniform grey floor. Flown over it, the nine
+photos contain **zero SIFT features** and the stitcher reports
+`Accepted 0 / 20 overlap constraints ... Disconnected match graph` - by design
+it will not fabricate a map from unconnected images. `worlds/textured.sdf` is
+`default.sdf` plus a 40 x 40 m visual-only plane (`models/textured_ground`)
+carrying a generated texture:
+
+* random, non-repeating patches and speckle (what SIFT needs),
+* a 1 m grid with the world coordinates written in every cell (`E+3` /
+  `N-2`), a North arrow, an East arrow, an `ORIGIN` disc and a red `TARGET`
+  ring at the default target (N5, E0),
+* 4096 px over 40 m = 102 px/m.
+
+Because the coordinates are printed on the ground, the finished `map.png`
+can be checked by eye: labels must read correctly (not mirrored), increase
+East to the right and North upwards, and line up across frame borders.
+
+Regenerate (different size, seed or target) with:
+
+```bash
+ros2 run drone_control make_ground_texture \
+    --output ~/PX4-Autopilot/Tools/simulation/gz/models/textured_ground/materials/textures/ground.jpg \
+    --size-m 40 --pixels 4096 --target 5 0
+```
+
+Start PX4 with that world (no rebuild needed - PX4 reads `PX4_GZ_WORLD`):
+
+```bash
+cd ~/PX4-Autopilot
+PX4_GZ_WORLD=textured make px4_sitl gz_x500_survey
+```
+
+(`make px4_sitl` once more also generates a `gz_x500_survey_textured` target.)
+
 ### Running the mosaic mission
 
-Terminals 1-3 exactly as for the survey mission (agent, `make px4_sitl
-gz_x500_survey`, QGroundControl), then:
+Terminals 1-3 as for the survey mission (agent, PX4, QGroundControl) but
+start PX4 with the textured world:
+
+```bash
+cd ~/PX4-Autopilot
+PX4_GZ_WORLD=textured make px4_sitl gz_x500_survey
+```
+
+then:
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -533,7 +576,19 @@ overview with the nine outlines. To run the ground station on another PC:
 same `ROS_DOMAIN_ID`/RMW, `ros2 run drone_control ground_station` there, and
 `ground_station:=false` in the launch here.
 
-### Verified without SITL
+### Verified
+
+**Live, in SITL (textured world).** A full mission flew the nine cells, every
+frame reached the ground station, and the real Gazebo photos stitched into a
+1402x1080 px map (14.0 x 10.8 m at 100 px/m, 94 % valid) in 18.9 s: 20/20
+overlap constraints, edge median error 0.09 px (limit 4 px), the nine
+outlines in the flown 7-8-9 / 4-5-6 / 1-2-3 layout, the printed E/N labels
+continuous across frame borders, North up, East right, and the estimated
+capture positions within ~0.2 m of the commanded grid. That run also
+confirmed the camera orientation assumption (labels upright, not mirrored)
+and the texture mapping (image right = East, top = North).
+
+**Offline, without SITL:**
 
 * The ground station was fed the stitcher's own synthetic nine frames (with
   their exact NED/yaw/AGL) as `CapturedFrame` messages; it wrote the manifest,
@@ -670,6 +725,8 @@ you are in; `ros2 run drone_control check_range_fusion` shows the same numbers
 
 | Log says | Cause | Fix |
 |----------|-------|-----|
+| `Accepted 20 / 20 overlap constraints` then `Image N: implausible optimized footprint scale/reflection` | **Observed.** Matching worked; the *initial* footprint of some images was wrong because their `agl_m` was ~0.19 m instead of ~5 m - the range finder was reading the camera housing (a visual 0.15 m below the ray, beyond its 0.1 m minimum range) as the ground. `diagnostics.json -> initial_placement -> footprint_m` shows which images shrank. | The housing visual is gone from the model; the ground station now replaces a range AGL that disagrees with the altitude above the pad by more than 2x and logs it; the navigator warns at capture. An already captured session can be re-stitched after fixing `agl_m` in its `manifest.json`. |
+| `stitch FAILED ... Accepted 0 / 20 overlap constraints ... Disconnected match graph`, `feature_counts` all 0 | **Observed.** The photos were taken over the `default` world's uniform grey floor: nothing for SIFT to match. The whole capture/transfer/manifest path worked. | Fly over the textured world: `PX4_GZ_WORLD=textured make px4_sitl gz_x500_survey` (see *Textured ground world*). |
 | `Camera online: first image ...` then `1 images received, last one 30.3s ago` (and `scan 30/s`) | **Observed on this machine.** Frames are lost between the bridge and the node: a 1280x960 rgb8 frame is 3.7 MB = ~2,600 UDP fragments per burst, and `net.core.rmem_max` is the Linux default 212992 bytes. CycloneDDS confirms it: `failed to increase socket receive buffer size to at least 10485760 bytes, current is 425984 bytes`. | See *Large camera images over DDS* below. |
 | `no image has ever arrived on /survey/camera/image` and `scan 0/s` | The bridge cannot discover Gazebo. PX4's make target starts Gazebo with `GZ_IP=127.0.0.1`; gz-transport only discovers peers on the same interface, so a bridge without `GZ_IP` (it picks the LAN interface) never sees it. Same symptom if `GZ_PARTITION` differs between the two shells. | The launch file now sets `GZ_IP=127.0.0.1` for the bridge (`gz_ip:=` to change). Check from the mission shell: `GZ_IP=127.0.0.1 gz topic -l \| grep survey` must list both topics. |
 | `no image has ever arrived` but `scan 30/s` | Discovery is fine; the camera sensor itself produces nothing (the Gazebo sensors system could not create the render engine for it). | Look at the Gazebo terminal for `ogre2` / render errors; try `gz topic -e -t /survey/camera/image -n 1` (with `GZ_IP=127.0.0.1`). |

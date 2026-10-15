@@ -37,6 +37,7 @@ setup(
             'rangefinder_params = drone_control.rangefinder_params:main',
             'check_range_fusion = drone_control.check_range_fusion:main',
             'ground_station = drone_control.ground_station:main',
+            'make_ground_texture = drone_control.make_ground_texture:main',
         ],
     },
 )
