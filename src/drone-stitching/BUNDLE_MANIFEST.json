@@ -1,11 +1,17 @@
 {
   "schema_version": 1,
-  "bundle_name": "drone-stitching-portable-2026-10-13",
+  "bundle_name": "drone-stitching-web-portable-2026-10-16",
+  "created_utc": "2026-10-16T14:05:00.751130+00:00",
   "files": [
     {
       "path": ".gitignore",
       "bytes": 67,
       "sha256": "409366f8c2ee88dfd3bf362b02652fde1d5fc02224fe566d07c34b8b000a4144"
+    },
+    {
+      "path": "HANDOFF_WEB_APP_2026-10-16.md",
+      "bytes": 14677,
+      "sha256": "20c7b1f70adfc172f1f179e84ee55c29a5b2df5a1f26c50c704f8b3956cc6035"
     },
     {
       "path": "PORTABILITY_CHECK.md",
@@ -19,8 +25,8 @@
     },
     {
       "path": "START_HERE.md",
-      "bytes": 6958,
-      "sha256": "96a90ffa07067c04eb4fc8b53bb568007566b89967dd2938260e21d5fbf7af1e"
+      "bytes": 8286,
+      "sha256": "4db629d800291e6bf40bd2b6b84e0c6aecbaa975cff1c306a5a940cee7c8bd05"
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -31,6 +37,11 @@
       "path": "VALIDATION.md",
       "bytes": 6956,
       "sha256": "f52746f6ebce200a459795208ff05053f9d25f9246f77b6e5328b476f4768310"
+    },
+    {
+      "path": "WEB_APP.md",
+      "bytes": 2848,
+      "sha256": "8d439dbd334899eaa82ebebcaa7d065ac907eac46138488889de7752ef2bbec0"
     },
     {
       "path": "datasets/sheffield_park_3/selected9/LICENSE",
@@ -144,18 +155,18 @@
     },
     {
       "path": "pyproject.toml",
-      "bytes": 578,
-      "sha256": "e322818fcabe0374330d5469c9fd734ce87bfa510bc1291bcc2a6dc814a22476"
+      "bytes": 711,
+      "sha256": "529365494088827b69cd3bd7123d5ddff854415b3846aaed30c46332207f4e77"
     },
     {
       "path": "requirements-dev.txt",
-      "bytes": 35,
-      "sha256": "6069ef4aea3b6a6d11cb7c4f85ca4a4620ad94bb864608488bce7a3c4023acea"
+      "bytes": 49,
+      "sha256": "49cad7248970677b2297ead3b4d4b2fe26120e03271c9d6b0965c885f217047b"
     },
     {
       "path": "requirements.txt",
-      "bytes": 126,
-      "sha256": "b7eb5e3eddde8110c55ab84c6be082fe09b9f80188d89a8b95e6cc2cbc664926"
+      "bytes": 185,
+      "sha256": "c4d6199899b84a8a88217e021bfda7e6ad7bae7bdb456ba2f32a023cc9acf8cc"
     },
     {
       "path": "runs/sheffield_selected9_sift/diagnostics.json",
@@ -343,14 +354,24 @@
       "sha256": "d7b208724068e2871d94866577eabc1eaa7130546e6b00f4ecb4f2372ee7427e"
     },
     {
+      "path": "scripts/build_portable_bundle.py",
+      "bytes": 4860,
+      "sha256": "f684d0e7e13daa220c4dadb6202247c498991c482c414459109767c0dcb1216f"
+    },
+    {
       "path": "scripts/run_demo.py",
-      "bytes": 1900,
-      "sha256": "fc3e487f0fb6d172a5878bb2a73c0be14b514ff2953e1bbc1ffd9d5b3f5a146a"
+      "bytes": 1953,
+      "sha256": "10b5a1ca6b228c5562bfdf70722cc5da5520191c40c1cb6a06905b9beb868a49"
     },
     {
       "path": "scripts/setup_env.py",
-      "bytes": 1389,
-      "sha256": "62ae37061b1da85d9603806a0bdb553680fceac1e1075eaa4eb66386e1452f6f"
+      "bytes": 2321,
+      "sha256": "8316afd48705a0b549a4f161d5d4cd4f7a6067272310d91f90ea180459f65070"
+    },
+    {
+      "path": "scripts/start_webapp.py",
+      "bytes": 2647,
+      "sha256": "23bd42380f543e23dc7743c2d8d114b0e61de09d277d5894ea1eef7f2fa96ddc"
     },
     {
       "path": "scripts/verify_bundle.py",
@@ -423,6 +444,11 @@
       "sha256": "7cd45e30f9b2612fa616435e46cc70d6cf5953f4768b0752f3667e6f5438821e"
     },
     {
+      "path": "src/drone_stitch/webapp.py",
+      "bytes": 10751,
+      "sha256": "d8de184b81ace829d2f44a1c3dcad99783d3d05e295f1ae0891f050ae5b37e35"
+    },
+    {
       "path": "tests/test_geometry_metadata.py",
       "bytes": 5518,
       "sha256": "fc7935af5b47c4e5069016fc3b3fdc4892e1b7de2c750019881f1df6f34399bc"
@@ -431,6 +457,26 @@
       "path": "tests/test_pipeline.py",
       "bytes": 5219,
       "sha256": "4715482469cd452a2cc765190fe7f1c684e1454a79b9afa8978159a0bd4d4624"
+    },
+    {
+      "path": "tests/test_webapp.py",
+      "bytes": 6738,
+      "sha256": "1cb5d9ab67e810f0b65f34754ead4c7360d37ee05d10d741fd86c368002094e0"
+    },
+    {
+      "path": "web/static/app.js",
+      "bytes": 19311,
+      "sha256": "8a8a9f343d8abb4d9ac7b04db09b9ac8a26bbfb88820ac4ac8061e46e6913bd7"
+    },
+    {
+      "path": "web/static/index.html",
+      "bytes": 12733,
+      "sha256": "fbb95eea6f0ad749e4200751ba9df4e8c8cc6dca6f2f6125963f3b81fc2d1e63"
+    },
+    {
+      "path": "web/static/styles.css",
+      "bytes": 22477,
+      "sha256": "ad834aad5dfe31f2ddc733e43b33683d83c5e092db706769b3c8b1a68c6698a3"
     }
   ]
 }

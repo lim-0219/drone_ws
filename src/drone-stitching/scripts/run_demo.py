@@ -16,7 +16,11 @@ def main():
     destination.mkdir(parents=True, exist_ok=False)
 
     def run(*arguments):
-        subprocess.run([sys.executable, "-m", "drone_stitch", *map(str, arguments)], cwd=root, check=True)
+        subprocess.run(
+            [sys.executable, "-I", "-m", "drone_stitch", *map(str, arguments)],
+            cwd=root,
+            check=True,
+        )
 
     if args.demo == "sheffield":
         source = root / "datasets/sheffield_park_3/selected9"

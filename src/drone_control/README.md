@@ -380,22 +380,34 @@ length.
 ### What happens
 
 ```
-drone (waypoint_navigator, final_action=mosaic)        ground PC (ground_station)
-─────────────────────────────────────────────          ──────────────────────────────────────
-fly to target = grid cell 5                            for every CapturedFrame:
-visit cells in order 5 4 1 2 3 6 9 8 7:                  images/capture_NN_idK.png  (saved at once)
-  settle, photo, publish CapturedFrame ───────────▶      manifest.json rewritten (stitcher input)
-  (image + NED, yaw, AGL, timestamp, cell)             9th frame in:
-after_mosaic: hover | land                               .venv/bin/python -m drone_stitch stitch ...
-                                                         map.png -> /survey/mosaic/map (RViz)
+drone (waypoint_navigator, final_action=mosaic)   ground PC (ground_station)            stitcher web app
+──────────────────────────────────────────────    ────────────────────────────────────  ───────────────────────────
+fly to target = grid cell 5                       for every CapturedFrame:              POST /api/sessions/<id>/frames
+visit cells in order 5 4 1 2 3 6 9 8 7:             save PNG + rewrite manifest.json  ─▶  n/9 on the dashboard
+  settle, photo, publish CapturedFrame ─────────▶    forward frame + metadata            9th frame: auto stitch
+  (image + NED, yaw, AGL, timestamp, cell)          when the web app reports            map shown in the browser
+after_mosaic: hover | land                          completed: fetch map.png        ◀─  GET /api/sessions/<id>
+                                                    -> /survey/mosaic/map (RViz)
+                                                  (web app down: run the CLI stitcher locally instead)
 ```
 
-The stitcher (`src/drone-stitching`, package `drone_stitch`) is used
-unmodified, as an external tool in its own virtualenv. Its contract, read
-from its code: nine images in exactly that order, a `manifest.json` with the
-camera footprint and optional per-image `ned_m` / `yaw_rad` / `agl_m` /
+The stitcher (`src/drone-stitching`, package `drone_stitch`, the
+"web-portable 2026-10-16" bundle) keeps its engine untouched; it is driven
+either through its **web app** (FastAPI + browser dashboard, default) or
+through its **CLI** in its own virtualenv. Engine contract, read from its
+code: nine images in exactly that order, a `manifest.json` with the camera
+footprint and optional per-image `ned_m` / `yaw_rad` / `agl_m` /
 `timestamp_s`, output into a new, empty directory, exit code 2 on failure
 with `diagnostics.json`.
+
+The bundle's web app originally accepted only nine images in one upload
+with a hard-coded test manifest (5 x 10 m footprint). Its hand-off document
+lists "receive one image at a time per session, with session id, capture
+index and metadata" as the next step; that session API was added here
+(`POST /api/sessions/<id>/frames`, `GET /api/sessions/<id>`,
+`GET /api/sessions/latest`, documented in the bundle's `WEB_APP.md`, tested
+in `tests/test_webapp_sessions.py`), and the dashboard now shows the
+drone's session (n/9, Map Scanning, map) without any clicking.
 
 ### The grid
 
@@ -447,9 +459,11 @@ large images are not dropped - see *Large camera images over DDS*).
 |-----------|---------|---------|
 | `frame_topic` | `/survey/frames` | input |
 | `output_root` | `~/drone_survey_sessions` | one folder per session |
-| `stitch_project_dir` | `~/drone_ws/src/drone-stitching` | the checkout; `.venv/bin/python` inside it runs the stitcher |
-| `stitch_python`, `stitch_config` | derived | interpreter / config (`config/stitch_config.json`: SIFT, 100 px/m) |
-| `auto_stitch`, `stitch_timeout_s` | `true`, `600` | stitch when the 9th frame arrives |
+| `stitch_backend` | `auto` | `webapp` (forward frames to the web app, it stitches), `cli` (run the stitcher locally), `auto` = web app if `GET /api/health` answers, else CLI; an upload failure also falls back to CLI |
+| `webapp_url`, `webapp_timeout_s` | `http://127.0.0.1:8000`, `15` | the stitcher web app |
+| `stitch_project_dir` | `~/drone_ws/src/drone-stitching` | the checkout; `.venv/bin/python` inside it runs the CLI stitcher |
+| `stitch_python`, `stitch_config` | derived | interpreter / config (`config/stitch_config.json`: SIFT, 100 px/m), CLI backend only |
+| `auto_stitch`, `stitch_timeout_s` | `true`, `600` | stitch when the 9th frame arrives / how long to wait for a map |
 | `camera_hfov_rad` | `1.2` | footprint + ideal pinhole `K` written into the manifest |
 | `image_top_yaw_offset_rad` | `0.0` | see the orientation note above |
 | `fallback_agl_m` | `5.0` | reference AGL if cell 5 had no valid range reading |
@@ -462,8 +476,9 @@ Session folder:
   images/capture_01_id5.png ... capture_09_id7.png
   manifest.json        stitcher input, valid after every frame
   frames.json          raw per-frame metadata as received
-  stitch_01/           map.png overview.png valid_mask.png coverage.png transforms.json diagnostics.json
-  stitch_result.json   status, elapsed time, diagnostics summary
+  stitch_01/           map.png (+ overview.png transforms.json diagnostics.json ... copied from
+                       the web app's runs/web/sessions/<id>/output when it runs on this PC)
+  stitch_result.json   backend, status, elapsed time, web app job id, diagnostics summary
 ```
 
 The manifest's `camera` block is computed from the image size and
@@ -492,13 +507,23 @@ for the same reason. The stitcher's own suite: `env -u PYTHONPATH
 
 ```bash
 cd ~/drone_ws/src/drone-stitching
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pip install --no-deps -e .
+python3 scripts/setup_env.py        # isolated .venv, keeps ROS's PYTHONPATH out
+.venv/bin/python -I -m pytest -q    # 38 passed
 ```
 
-(That is its README procedure; `.venv/` is git-ignored there. A
-`COLCON_IGNORE` file keeps colcon from trying to build the pip project.)
+(`.venv/` is git-ignored there. A `COLCON_IGNORE` file keeps colcon from
+trying to build the pip project.)
+
+### Stitcher web app (dashboard)
+
+```bash
+cd ~/drone_ws/src/drone-stitching
+python3 scripts/start_webapp.py     # http://127.0.0.1:8000, opens the browser
+```
+
+Leave it running: the ground station forwards every frame to it and the
+page shows `드론 수신 중 n/9` -> `Map Scanning` -> the map. Without it the
+ground station falls back to the CLI stitcher and only RViz shows the map.
 
 ### Textured ground world (required for stitching)
 
@@ -546,7 +571,14 @@ cd ~/PX4-Autopilot
 PX4_GZ_WORLD=textured make px4_sitl gz_x500_survey
 ```
 
-then:
+Terminal 4 - the stitcher web app (dashboard):
+
+```bash
+cd ~/drone_ws/src/drone-stitching
+python3 scripts/start_webapp.py
+```
+
+then (terminal 5):
 
 ```bash
 source /opt/ros/humble/setup.bash

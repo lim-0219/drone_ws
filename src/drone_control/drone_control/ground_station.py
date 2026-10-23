@@ -5,25 +5,31 @@ Ground-station side of the mosaic mission.
 Listens for ``drone_control_msgs/CapturedFrame`` from the drone.  For every
 frame it immediately writes the photo to disk and refreshes a ``drone_stitch``
 manifest, so the session folder is always a valid, partially filled stitcher
-input.  When the last frame of a session arrives it runs the inherited
-stitcher (``src/drone-stitching``) in that project's own virtualenv - the ROS
-Python environment never imports OpenCV - and publishes the resulting map and
-overview as ``sensor_msgs/Image`` for RViz.
+input.  Stitching then happens through one of two backends:
 
-Session folder::
+* ``webapp`` - every frame is forwarded, as it arrives, to the stitcher's
+  local web app (``POST /api/sessions/<id>/frames``).  The web app shows the
+  session filling up (n/9), stitches automatically when the ninth frame is
+  in, and the browser dashboard displays the map.  This node polls the
+  session, downloads the finished map and republishes it for RViz.
+* ``cli`` - the inherited stitcher is run directly in its own virtualenv
+  (``python -m drone_stitch stitch``) once all frames are on disk.
+
+``auto`` (default) uses ``webapp`` when ``GET /api/health`` answers at the
+start of a session and ``cli`` otherwise; an upload failure mid-session also
+falls back to ``cli``, so a map is produced either way.  The ROS Python
+environment never imports OpenCV - the stitcher has its own virtualenv.
+
+Session folder (this node's copy; the web app keeps its own under its
+``runs/web/sessions/<id>``)::
 
     <output_root>/<session_id>/
         images/capture_01_id5.png ... capture_09_id7.png
         manifest.json          drone_stitch input (rewritten after every frame)
         frames.json            raw per-frame metadata as received
-        stitch_01/             one stitcher run: map.png, overview.png,
-                               transforms.json, diagnostics.json, ...
-        stitch_result.json     status of the last run
-
-Re-run a stitch by hand (same thing this node does)::
-
-    <stitch_project_dir>/.venv/bin/python -m drone_stitch stitch
-        <session>/manifest.json --output <session>/stitch_02 --config <config>
+        stitch_01/             map.png (+ overview.png, transforms.json,
+                               diagnostics.json, ... when available)
+        stitch_result.json     backend, status, timings
 
 Manifest conventions (see the stitcher's README): image 5 is the origin,
 local X = image right, local Y = image top; ``ned_m``/``yaw_rad``/``agl_m``
@@ -39,6 +45,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -50,10 +57,14 @@ from drone_control_msgs.msg import CapturedFrame
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+import requests
 from sensor_msgs.msg import Image
 
 # drone_stitch.geometry.CAPTURE_ORDER - the only order the stitcher accepts.
 CAPTURE_ORDER = (5, 4, 1, 2, 3, 6, 9, 8, 7)
+# Files the web app's job directory may contain next to map.png.
+_RESULT_FILES = ('map.png', 'overview.png', 'valid_mask.png', 'coverage.png',
+                 'transforms.json', 'diagnostics.json')
 
 
 @dataclass
@@ -68,6 +79,8 @@ class Session:
     frames: Dict[int, dict] = field(default_factory=dict)   # sequence -> raw frame record
     stitch_runs: int = 0
     stitching: bool = False
+    backend: str = ''            # 'webapp' or 'cli' once decided
+    webapp_job_id: str = ''
 
     @property
     def complete(self) -> bool:
@@ -118,14 +131,15 @@ class GroundStation(Node):
         self._results: 'queue.Queue[Tuple[Session, dict]]' = queue.Queue()
         self.create_timer(0.5, self._publish_results)
 
-        if not os.path.isfile(self._stitch_python):
+        if self._stitch_backend != 'webapp' and not os.path.isfile(self._stitch_python):
             self.get_logger().warn(
                 f'stitcher interpreter not found: {self._stitch_python}. Frames will still be '
                 f'saved; create the venv as described in {self._stitch_project_dir}/README.md '
-                f'(python3 scripts/setup_env.py) to enable stitching')
+                f'(python3 scripts/setup_env.py) to enable CLI stitching')
         self.get_logger().info(
             f'listening on {self._frame_topic}; sessions -> {self._output_root}; '
-            f'stitcher: {self._stitch_python} (auto_stitch={self._auto_stitch})')
+            f'backend={self._stitch_backend} webapp={self._webapp_url} '
+            f'cli={self._stitch_python} (auto_stitch={self._auto_stitch})')
 
     # ------------------------------------------------------------------
     # parameters
@@ -133,6 +147,9 @@ class GroundStation(Node):
     def _declare_parameters(self) -> None:
         self.declare_parameter('frame_topic', '/survey/frames')
         self.declare_parameter('output_root', '~/drone_survey_sessions')
+        self.declare_parameter('stitch_backend', 'auto')
+        self.declare_parameter('webapp_url', 'http://127.0.0.1:8000')
+        self.declare_parameter('webapp_timeout_s', 15.0)
         self.declare_parameter('stitch_project_dir', '~/drone_ws/src/drone-stitching')
         self.declare_parameter('stitch_python', '')
         self.declare_parameter('stitch_config', '')
@@ -148,6 +165,12 @@ class GroundStation(Node):
         self._frame_topic = str(self.get_parameter('frame_topic').value)
         self._output_root = os.path.expanduser(str(self.get_parameter('output_root').value))
         os.makedirs(self._output_root, exist_ok=True)
+
+        self._stitch_backend = str(self.get_parameter('stitch_backend').value).strip().lower()
+        if self._stitch_backend not in ('auto', 'webapp', 'cli'):
+            raise ValueError('"stitch_backend" must be "auto", "webapp" or "cli"')
+        self._webapp_url = str(self.get_parameter('webapp_url').value).rstrip('/')
+        self._webapp_timeout = float(self.get_parameter('webapp_timeout_s').value)
 
         self._stitch_project_dir = os.path.expanduser(
             str(self.get_parameter('stitch_project_dir').value))
@@ -179,9 +202,11 @@ class GroundStation(Node):
             directory = os.path.join(self._output_root, msg.session_id or 'session_unnamed')
             os.makedirs(os.path.join(directory, 'images'), exist_ok=True)
             session = Session(msg.session_id, directory, int(msg.total))
+            session.backend = self._choose_backend(session)
             self._sessions[msg.session_id] = session
             self.get_logger().info(
-                f'new session {msg.session_id}: expecting {msg.total} frames -> {directory}')
+                f'new session {msg.session_id}: expecting {msg.total} frames -> {directory} '
+                f'(backend: {session.backend})')
 
         if msg.sequence in session.frames:
             self.get_logger().warn(
@@ -206,7 +231,7 @@ class GroundStation(Node):
             session.grid_spacing = (float(msg.grid_spacing_m[0]), float(msg.grid_spacing_m[1]))
 
         agl, agl_source = self._plausible_agl(msg)
-        session.frames[int(msg.sequence)] = {
+        record = {
             'sequence': int(msg.sequence),
             'grid_id': int(msg.grid_id),
             'file': filename,
@@ -221,11 +246,15 @@ class GroundStation(Node):
             'image': {'width': msg.image.width, 'height': msg.image.height,
                       'encoding': msg.image.encoding},
         }
+        session.frames[int(msg.sequence)] = record
         self._write_manifest(session)
         self.get_logger().info(
             f'{msg.session_id}: frame {msg.sequence}/{session.total} (cell {msg.grid_id}) saved '
             f'N={msg.ned_m[0]:.2f} E={msg.ned_m[1]:.2f} yaw={math.degrees(msg.yaw_rad):.1f}deg '
             f'agl={msg.agl_m:.2f}m' + ('' if msg.agl_valid else ' (invalid)'))
+
+        if session.backend == 'webapp':
+            self._upload_frame(session, record)
 
         if session.complete:
             if self._auto_stitch:
@@ -285,35 +314,46 @@ class GroundStation(Node):
                            f'range-finder height of cell 5 (or the configured fallback).'),
         }
 
+    def _reference_agl(self, session: Session) -> Tuple[float, str]:
+        reference = next((f for f in session.frames.values()
+                          if f['grid_id'] == 5 and f['agl_m']), None)
+        if reference:
+            return reference['agl_m'], 'cell5_frame'
+        return self._fallback_agl, 'fallback_agl_m'
+
+    def _grid_block(self, session: Session) -> dict:
+        spacing = list(session.grid_spacing) if session.grid_spacing[0] > 0.0 else [2.5, 5.0]
+        return {'spacing_m': spacing}
+
+    @staticmethod
+    def _image_entry(frame: dict) -> dict:
+        entry = {
+            'id': frame['grid_id'],
+            'file': frame['file'],
+            'timestamp_s': frame['timestamp_s'],
+            'ned_m': frame['ned_m'],
+            'yaw_rad': frame['yaw_rad'],
+        }
+        if frame['agl_m']:
+            entry['agl_m'] = frame['agl_m']
+        return entry
+
     def _write_manifest(self, session: Session) -> None:
         ordered = [session.frames[seq] for seq in sorted(session.frames)]
-        reference = next((f for f in ordered if f['grid_id'] == 5 and f['agl_m']), None)
-        reference_agl = reference['agl_m'] if reference else self._fallback_agl
-        images = []
-        for frame in ordered:
-            entry = {
-                'id': frame['grid_id'],
-                'file': frame['file'],
-                'timestamp_s': frame['timestamp_s'],
-                'ned_m': frame['ned_m'],
-                'yaw_rad': frame['yaw_rad'],
-            }
-            if frame['agl_m']:
-                entry['agl_m'] = frame['agl_m']
-            images.append(entry)
-        spacing = list(session.grid_spacing) if session.grid_spacing[0] > 0.0 else [2.5, 5.0]
+        reference_agl, reference_source = self._reference_agl(session)
         manifest = {
             'version': 1,
             'dataset_kind': 'real',
             'ned_frame_id': session.session_id,
             'camera': self._camera_block(session, reference_agl),
-            'grid': {'spacing_m': spacing},
-            'images': images,
+            'grid': self._grid_block(session),
+            'images': [self._image_entry(frame) for frame in ordered],
             'ground_station': {
                 'frames_received': len(ordered),
                 'frames_expected': session.total,
                 'expected_capture_order': list(CAPTURE_ORDER),
-                'reference_agl_source': 'cell5_frame' if reference else 'fallback_agl_m',
+                'reference_agl_source': reference_source,
+                'backend': session.backend,
             },
         }
         with open(os.path.join(session.directory, 'manifest.json'), 'w') as handle:
@@ -322,14 +362,124 @@ class GroundStation(Node):
             json.dump(ordered, handle, indent=2)
 
     # ------------------------------------------------------------------
+    # web app backend
+    # ------------------------------------------------------------------
+    def _choose_backend(self, session: Session) -> str:
+        if self._stitch_backend == 'cli':
+            return 'cli'
+        try:
+            reply = requests.get(f'{self._webapp_url}/api/health', timeout=3.0)
+            reply.raise_for_status()
+            if reply.json().get('status') == 'ok':
+                return 'webapp'
+            reason = f'unexpected health reply {reply.text[:80]!r}'
+        except (requests.RequestException, ValueError) as error:
+            reason = str(error)
+        if self._stitch_backend == 'webapp':
+            self.get_logger().error(
+                f'{session.session_id}: web app at {self._webapp_url} not reachable ({reason}); '
+                f'frames will be saved but nothing will be stitched')
+            return 'webapp'
+        self.get_logger().warn(
+            f'{session.session_id}: web app at {self._webapp_url} not reachable ({reason}); '
+            f'falling back to the CLI stitcher')
+        return 'cli'
+
+    def _upload_frame(self, session: Session, frame: dict) -> None:
+        """Forward one frame to the web app's session API; fall back to CLI on failure."""
+        reference_agl, _ = self._reference_agl(session)
+        metadata = {
+            'sequence': frame['sequence'],
+            'grid_id': frame['grid_id'],
+            'total': session.total,
+            'timestamp_s': frame['timestamp_s'],
+            'ned_m': frame['ned_m'],
+            'yaw_rad': frame['yaw_rad'],
+            'agl_m': frame['agl_m'],
+            'agl_source': frame['agl_source'],
+            'camera': self._camera_block(session, reference_agl),
+            'grid': self._grid_block(session),
+            'ned_frame_id': session.session_id,
+        }
+        path = os.path.join(session.directory, frame['file'])
+        try:
+            with open(path, 'rb') as handle:
+                reply = requests.post(
+                    f'{self._webapp_url}/api/sessions/{session.session_id}/frames',
+                    files={'image': (os.path.basename(path), handle, 'image/png')},
+                    data={'metadata': json.dumps(metadata)},
+                    timeout=self._webapp_timeout)
+            reply.raise_for_status()
+            status = reply.json()
+        except (requests.RequestException, ValueError, OSError) as error:
+            detail = ''
+            response = getattr(error, 'response', None)
+            if response is not None:
+                detail = f' ({response.status_code}: {response.text[:200]})'
+            self.get_logger().error(
+                f'{session.session_id}: upload of frame {frame["sequence"]} to the web app '
+                f'failed{detail}: {error}; switching this session to the CLI stitcher')
+            session.backend = 'cli'
+            return
+        self.get_logger().info(
+            f'{session.session_id}: web app has {status.get("received")}/{status.get("total")} '
+            f'frames (status {status.get("status")})')
+        if status.get('job_id'):
+            session.webapp_job_id = str(status['job_id'])
+
+    def _stitch_via_webapp(self, session: Session) -> dict:
+        """Wait for the web app's job for this session, then fetch its results."""
+        run_dir = _run_dir(session)
+        os.makedirs(run_dir, exist_ok=True)
+        result: dict = {'session_id': session.session_id, 'backend': 'webapp',
+                        'run_dir': run_dir, 'webapp_url': self._webapp_url,
+                        'started_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+        deadline = time.monotonic() + self._stitch_timeout
+        status: dict = {}
+        try:
+            while time.monotonic() < deadline:
+                reply = requests.get(f'{self._webapp_url}/api/sessions/{session.session_id}',
+                                     timeout=self._webapp_timeout)
+                reply.raise_for_status()
+                status = reply.json()
+                if status.get('status') in ('completed', 'failed'):
+                    break
+                time.sleep(1.0)
+            else:
+                raise TimeoutError(f'web app did not finish within {self._stitch_timeout:.0f}s '
+                                   f'(last status {status.get("status")!r})')
+            result['job_id'] = status.get('job_id')
+            result['webapp_status'] = status
+            if status.get('status') != 'completed':
+                raise RuntimeError(status.get('error') or 'web app reported failure')
+            reply = requests.get(f'{self._webapp_url}{status["map_url"]}',
+                                 timeout=self._webapp_timeout)
+            reply.raise_for_status()
+            with open(os.path.join(run_dir, 'map.png'), 'wb') as handle:
+                handle.write(reply.content)
+            # The web app runs on this PC in the normal setup: copy the rest of
+            # its output (overview, transforms, diagnostics) when it is readable.
+            output_dir = status.get('output_dir')
+            if output_dir and os.path.isdir(output_dir):
+                for name in _RESULT_FILES:
+                    source = os.path.join(output_dir, name)
+                    if os.path.isfile(source):
+                        shutil.copyfile(source, os.path.join(run_dir, name))
+            result['status'] = 'success'
+        except (requests.RequestException, ValueError, OSError, RuntimeError,
+                TimeoutError) as error:
+            result.update(status='failed', error=f'{type(error).__name__}: {error}')
+        return result
+
+    # ------------------------------------------------------------------
     # stitching
     # ------------------------------------------------------------------
     def start_stitch(self, session: Session) -> Optional[threading.Thread]:
-        """Run the stitcher for this session in a worker thread."""
+        """Produce the map for this session in a worker thread (web app or CLI)."""
         if session.stitching:
             self.get_logger().warn(f'{session.session_id}: a stitch is already running')
             return None
-        if not os.path.isfile(self._stitch_python):
+        if session.backend != 'webapp' and not os.path.isfile(self._stitch_python):
             self.get_logger().error(
                 f'{session.session_id}: all frames saved but the stitcher venv is missing '
                 f'({self._stitch_python}); stitch by hand once it exists')
@@ -340,18 +490,33 @@ class GroundStation(Node):
         return thread
 
     def _stitch(self, session: Session) -> None:
+        started = time.monotonic()
+        if session.backend == 'webapp':
+            self.get_logger().info(
+                f'{session.session_id}: all frames at the web app; waiting for its map')
+            result = self._stitch_via_webapp(session)
+        else:
+            result = self._stitch_via_cli(session)
+        result['elapsed_s'] = time.monotonic() - started
+        self._summarise_diagnostics(result)
+        with open(os.path.join(session.directory, 'stitch_result.json'), 'w') as handle:
+            json.dump(result, handle, indent=2)
+        session.stitching = False
+        self._results.put((session, result))
+
+    def _stitch_via_cli(self, session: Session) -> dict:
         run_dir = _run_dir(session)
         manifest = os.path.join(session.directory, 'manifest.json')
-        command = [self._stitch_python, '-m', 'drone_stitch', 'stitch', manifest,
+        command = [self._stitch_python, '-I', '-m', 'drone_stitch', 'stitch', manifest,
                    '--output', run_dir, '--config', self._stitch_config]
         # The stitcher must see only its own venv: drop the ROS PYTHONPATH.
         env = dict(os.environ)
         env.pop('PYTHONPATH', None)
-        self.get_logger().info(f'{session.session_id}: stitching -> {run_dir}')
-        started = time.monotonic()
-        result: dict = {'session_id': session.session_id, 'run_dir': run_dir,
-                        'command': command, 'started_utc': time.strftime(
-                            '%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+        env.pop('PYTHONHOME', None)
+        self.get_logger().info(f'{session.session_id}: stitching (CLI) -> {run_dir}')
+        result: dict = {'session_id': session.session_id, 'backend': 'cli', 'run_dir': run_dir,
+                        'command': command,
+                        'started_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
         try:
             completed = subprocess.run(command, capture_output=True, text=True,
                                        timeout=self._stitch_timeout, env=env,
@@ -362,23 +527,22 @@ class GroundStation(Node):
                 os.path.join(run_dir, 'map.png'))) else 'failed'
         except (OSError, subprocess.TimeoutExpired) as error:
             result.update(status='failed', error=f'{type(error).__name__}: {error}')
-        result['elapsed_s'] = time.monotonic() - started
+        return result
 
-        diagnostics_path = os.path.join(run_dir, 'diagnostics.json')
-        if os.path.isfile(diagnostics_path):
-            try:
-                with open(diagnostics_path) as handle:
-                    diagnostics = json.load(handle)
-                result['diagnostics'] = {
-                    key: diagnostics.get(key) for key in
-                    ('status', 'error', 'map_size_pixels', 'valid_pixel_fraction',
-                     'elapsed_seconds', 'warnings')}
-            except (OSError, ValueError):
-                pass
-        with open(os.path.join(session.directory, 'stitch_result.json'), 'w') as handle:
-            json.dump(result, handle, indent=2)
-        session.stitching = False
-        self._results.put((session, result))
+    @staticmethod
+    def _summarise_diagnostics(result: dict) -> None:
+        diagnostics_path = os.path.join(result['run_dir'], 'diagnostics.json')
+        if not os.path.isfile(diagnostics_path):
+            return
+        try:
+            with open(diagnostics_path) as handle:
+                diagnostics = json.load(handle)
+            result['diagnostics'] = {
+                key: diagnostics.get(key) for key in
+                ('status', 'error', 'map_size_pixels', 'valid_pixel_fraction',
+                 'elapsed_seconds', 'warnings')}
+        except (OSError, ValueError):
+            pass
 
     def _publish_results(self) -> None:
         """Report finished stitches and publish their images (executor thread)."""
@@ -388,21 +552,23 @@ class GroundStation(Node):
             except queue.Empty:
                 return
             if result['status'] != 'success':
+                reason = result.get('error') or f'see {result["run_dir"]}/diagnostics.json'
                 self.get_logger().error(
-                    f'{session.session_id}: stitch FAILED ({result.get("error") or "see "}'
-                    f'{result["run_dir"]}/diagnostics.json): '
+                    f'{session.session_id}: stitch FAILED via {result["backend"]} ({reason}): '
                     f'{(result.get("stderr") or "").strip()[-300:]}')
                 continue
             run_dir = result['run_dir']
             diag = result.get('diagnostics') or {}
             self.get_logger().info(
-                f'{session.session_id}: stitch OK in {result["elapsed_s"]:.1f}s -> '
-                f'{run_dir}/map.png {diag.get("map_size_pixels")} px, '
-                f'valid {100.0 * (diag.get("valid_pixel_fraction") or 0.0):.0f}%')
+                f'{session.session_id}: stitch OK via {result["backend"]} in '
+                f'{result["elapsed_s"]:.1f}s -> {run_dir}/map.png '
+                f'{diag.get("map_size_pixels") or ""}')
             stamp = self.get_clock().now().to_msg()
             for publisher, name in ((self._map_pub, 'map.png'),
                                     (self._overview_pub, 'overview.png')):
                 path = os.path.join(run_dir, name)
+                if not os.path.isfile(path):
+                    continue
                 try:
                     publisher.publish(png_to_image(path, session.session_id, stamp))
                 except (OSError, ValueError) as error:

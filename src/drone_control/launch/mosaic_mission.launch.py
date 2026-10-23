@@ -83,6 +83,11 @@ def generate_launch_description() -> LaunchDescription:
                               description='The drone-stitching checkout (its .venv is used).'),
         DeclareLaunchArgument('stitch_config', default_value=default_stitch_config),
         DeclareLaunchArgument('auto_stitch', default_value='true'),
+        DeclareLaunchArgument('stitch_backend', default_value='auto',
+                              description='"auto" (web app if reachable, else CLI), '
+                                          '"webapp" or "cli".'),
+        DeclareLaunchArgument('webapp_url', default_value='http://127.0.0.1:8000',
+                              description='The stitcher web app (scripts/start_webapp.py).'),
         # processes
         DeclareLaunchArgument('bridge', default_value='true'),
         DeclareLaunchArgument('gz_ip', default_value='127.0.0.1',
@@ -149,6 +154,8 @@ def generate_launch_description() -> LaunchDescription:
             'stitch_project_dir': _typed('stitch_project_dir', str),
             'stitch_config': _typed('stitch_config', str),
             'auto_stitch': _typed('auto_stitch', bool),
+            'stitch_backend': _typed('stitch_backend', str),
+            'webapp_url': _typed('webapp_url', str),
             'camera_hfov_rad': CAMERA_HFOV_RAD,
             'fallback_agl_m': _typed('target_altitude', float),
         }],
