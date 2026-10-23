@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS on the JETSON (onboard computer) for the real vehicle.
+
+  Wi-Fi multicast is unreliable, so discovery is done by unicast to the ground
+  PC's fixed address, and DDS is pinned to the Wi-Fi interface so it never tries
+  the USB/Ethernet links. Both machines must use the same ROS_DOMAIN_ID (7).
+
+  Edit: NetworkInterface name (ip a: usually wlan0) and the ground PC address.
+  Use:  export CYCLONEDDS_URI=file://$HOME/drone_ws/install/drone_control/share/drone_control/config/cyclonedds_jetson.xml
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="wlan0" priority="default" multicast="false"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+        <Peer address="192.168.4.10"/>   <!-- ground PC -->
+        <Peer address="127.0.0.1"/>      <!-- nodes on this Jetson -->
+      </Peers>
+    </Discovery>
+    <Internal>
+      <SocketReceiveBufferSize max="10MB"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

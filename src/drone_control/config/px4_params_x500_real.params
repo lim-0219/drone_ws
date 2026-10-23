@@ -1,0 +1,30 @@
+# drone_control: PX4 parameters for the REAL vehicle (Pixhawk 6C, X500 V2, Jetson on TELEM2)
+# Load in QGroundControl: Vehicle Setup -> Parameters -> Tools -> Load from file, then reboot.
+# Format: vehicle_id <TAB> component_id <TAB> name <TAB> value <TAB> type (6 = int32, 9 = float)
+#
+# Companion link: uXRCE-DDS client on TELEM2 (serial port enum 102) at 921600 baud, ROS domain 7,
+# timestamp sync on (the ROS nodes stamp messages with their own clock).
+1	1	UXRCE_DDS_CFG	102	6
+1	1	SER_TEL2_BAUD	921600	6
+1	1	UXRCE_DDS_DOM_ID	7	6
+1	1	UXRCE_DDS_SYNCT	1	6
+# Keep MAVLink off TELEM2 (TELEM1 stays the SiK radio / QGC link via MAV_0_CONFIG).
+1	1	MAV_1_CONFIG	0	6
+# TF-Luna on TELEM3 (enum 103) through the Benewake TFmini serial driver (UART mode).
+# Remove this line if the TF-Luna is wired to the Jetson instead.
+1	1	SENS_TFMINI_CFG	103	6
+# Range finder: always fuse so vehicle_local_position.dist_bottom is valid at the mission altitude.
+# Height reference stays GPS (1) on the real vehicle; set EKF2_RNG_POS_X/Y/Z to the mount offset.
+1	1	EKF2_RNG_CTRL	2	6
+1	1	EKF2_HGT_REF	1	6
+# Offboard link lost (companion crash / Wi-Fi) after 1 s -> Hold; RC loss -> Return; RC never ignored in offboard.
+1	1	COM_OF_LOSS_T	1.0	9
+1	1	COM_OBL_RC_ACT	5	6
+1	1	COM_RCL_EXCEPT	0	6
+1	1	NAV_RCL_ACT	2	6
+# Disarm 2 s after landing is detected.
+1	1	COM_DISARM_LAND	2.0	9
+# Battery: 4S LiHV (4.35 V/cell full, 3.5 V/cell empty under load).
+1	1	BAT1_N_CELLS	4	6
+1	1	BAT1_V_CHARGED	4.35	9
+1	1	BAT1_V_EMPTY	3.5	9

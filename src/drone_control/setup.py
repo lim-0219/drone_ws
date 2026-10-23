@@ -18,7 +18,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml') + glob('config/*.rviz') + glob('config/*.xml')
-            + glob('config/*.json')),
+            + glob('config/*.json') + glob('config/*.params')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -38,6 +38,8 @@ setup(
             'check_range_fusion = drone_control.check_range_fusion:main',
             'ground_station = drone_control.ground_station:main',
             'make_ground_texture = drone_control.make_ground_texture:main',
+            'laser_control = drone_control.laser_control:main',
+            'csi_camera = drone_control.csi_camera_node:main',
         ],
     },
 )

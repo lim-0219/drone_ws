@@ -56,9 +56,15 @@ from drone_control.image_io import image_to_pil, png_to_image
 from drone_control_msgs.msg import CapturedFrame
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    qos_profile_sensor_data,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 import requests
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 
 # drone_stitch.geometry.CAPTURE_ORDER - the only order the stitcher accepts.
 CAPTURE_ORDER = (5, 4, 1, 2, 3, 6, 9, 8, 7)
@@ -131,6 +137,13 @@ class GroundStation(Node):
         self._results: 'queue.Queue[Tuple[Session, dict]]' = queue.Queue()
         self.create_timer(0.5, self._publish_results)
 
+        # Real camera: the driver's CameraInfo (from a checkerboard calibration)
+        # replaces the ideal-pinhole model derived from camera_hfov_rad.
+        self._camera_info: Optional[CameraInfo] = None
+        if self._camera_info_topic:
+            self.create_subscription(CameraInfo, self._camera_info_topic, self._on_camera_info,
+                                     qos_profile_sensor_data)
+
         if self._stitch_backend != 'webapp' and not os.path.isfile(self._stitch_python):
             self.get_logger().warn(
                 f'stitcher interpreter not found: {self._stitch_python}. Frames will still be '
@@ -156,6 +169,7 @@ class GroundStation(Node):
         self.declare_parameter('stitch_timeout_s', 600.0)
         self.declare_parameter('auto_stitch', True)
         self.declare_parameter('camera_hfov_rad', 1.2)
+        self.declare_parameter('camera_info_topic', '')
         self.declare_parameter('image_top_yaw_offset_rad', 0.0)
         self.declare_parameter('fallback_agl_m', 5.0)
         self.declare_parameter('map_topic', '/survey/mosaic/map')
@@ -186,6 +200,7 @@ class GroundStation(Node):
         self._hfov = float(self.get_parameter('camera_hfov_rad').value)
         if not 0.0 < self._hfov < math.pi:
             raise ValueError('"camera_hfov_rad" must be in (0, pi)')
+        self._camera_info_topic = str(self.get_parameter('camera_info_topic').value).strip()
         self._yaw_offset = float(self.get_parameter('image_top_yaw_offset_rad').value)
         self._fallback_agl = float(self.get_parameter('fallback_agl_m').value)
         if self._fallback_agl <= 0.0:
@@ -264,6 +279,15 @@ class GroundStation(Node):
                 f'{msg.session_id}: last frame arrived but frames {session.missing()} are '
                 f'missing; not stitching')
 
+    def _on_camera_info(self, msg: CameraInfo) -> None:
+        if msg.k[0] > 0.0 and msg.k[4] > 0.0 and msg.width > 0 and msg.height > 0:
+            if self._camera_info is None:
+                self.get_logger().info(
+                    f'camera calibration received on {self._camera_info_topic}: '
+                    f'{msg.width}x{msg.height} fx={msg.k[0]:.1f} fy={msg.k[4]:.1f} '
+                    f'cx={msg.k[2]:.1f} cy={msg.k[5]:.1f} D={list(msg.d)}')
+            self._camera_info = msg
+
     def _plausible_agl(self, msg: CapturedFrame) -> Tuple[Optional[float], str]:
         """
         Height above ground to put in the manifest, and where it came from.
@@ -293,8 +317,38 @@ class GroundStation(Node):
     # manifest
     # ------------------------------------------------------------------
     def _camera_block(self, session: Session, reference_agl: float) -> dict:
-        """Footprint + intrinsics of an ideal pinhole camera from hfov and image size."""
+        """
+        Camera block of the manifest: footprint, reference AGL, intrinsics.
+
+        With a CameraInfo (real camera, calibrated) its K and distortion are
+        used; otherwise an ideal pinhole from camera_hfov_rad and the image
+        size (the Gazebo camera).  Footprint = [W*h/fx, H*h/fy] either way.
+        """
         width, height = session.image_size
+        info = self._camera_info
+        if info is not None and (info.width, info.height) == (width, height):
+            fx, fy, cx, cy = info.k[0], info.k[4], info.k[2], info.k[5]
+            distortion = [float(v) for v in info.d]
+            if len(distortion) not in (4, 5, 8, 12, 14):
+                distortion = (distortion + [0.0] * 5)[:5]
+            return {
+                'footprint_m': [width * reference_agl / fx, height * reference_agl / fy],
+                'reference_agl_m': reference_agl,
+                'image_top_yaw_offset_rad': self._yaw_offset,
+                'calibration': {
+                    'image_size': [width, height],
+                    'K': [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+                    'distortion': distortion,
+                },
+                'scale_note': (f'Calibrated camera from {self._camera_info_topic} '
+                               f'(distortion_model {info.distortion_model or "plumb_bob"}). '
+                               f'reference_agl_m is the range-finder height of cell 5 '
+                               f'(or the configured fallback).'),
+            }
+        if info is not None:
+            self.get_logger().warn(
+                f'CameraInfo is {info.width}x{info.height} but frames are {width}x{height}; '
+                f'using the hfov model instead', throttle_duration_sec=30.0)
         fx = (width / 2.0) / math.tan(self._hfov / 2.0)
         return {
             # Ground length along image u (width) and v (height) at reference_agl:

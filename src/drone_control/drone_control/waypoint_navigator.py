@@ -75,7 +75,7 @@ from drone_control.laser_triangle import (
     ned_to_enu,
     triangle_side,
 )
-from drone_control_msgs.msg import CapturedFrame
+from drone_control_msgs.msg import CapturedFrame, LaserCommand
 from geometry_msgs.msg import Point, TransformStamped
 from px4_msgs.msg import (
     DistanceSensor,
@@ -346,6 +346,7 @@ class WaypointNavigator(Node):
         self._distance_sensor_pub = self.create_publisher(
             DistanceSensor, self._topic(_TOPIC_DISTANCE_SENSOR), qos)
         self._marker_pub = self.create_publisher(MarkerArray, self._marker_topic, 10)
+        self._laser_pub = self.create_publisher(LaserCommand, self._laser_command_topic, 10)
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
         # Frames go to the ground station reliably and are kept (transient
         # local, depth = frames per mission) so a ground station that starts
@@ -476,6 +477,8 @@ class WaypointNavigator(Node):
         self.declare_parameter('laser_mount_radius', 0.08)
         self.declare_parameter('laser_mount_down', 0.03)
         self.declare_parameter('marker_topic', '/survey/laser_markers')
+        self.declare_parameter('laser_command_topic', '/laser/command')
+        self.declare_parameter('laser_pattern', 'triangle')
         self.declare_parameter('marker_frame', 'map')
         self.declare_parameter('body_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
@@ -576,6 +579,10 @@ class WaypointNavigator(Node):
             mount_down=float(self.get_parameter('laser_mount_down').value),
         )
         self._marker_topic = str(self.get_parameter('marker_topic').value)
+        self._laser_command_topic = str(self.get_parameter('laser_command_topic').value)
+        self._laser_pattern = str(self.get_parameter('laser_pattern').value)
+        if self._laser_pattern not in ('triangle', 'line'):
+            raise ValueError('"laser_pattern" must be "triangle" or "line"')
         self._marker_frame = str(self.get_parameter('marker_frame').value)
         self._body_frame = str(self.get_parameter('body_frame').value)
         self._publish_tf = bool(self.get_parameter('publish_tf').value)
@@ -923,18 +930,28 @@ class WaypointNavigator(Node):
         self._state = new_state
         self._inside_tolerance_since = None
 
+    def _publish_laser_command(self) -> None:
+        """Tell laser_control what the mission wants: beams on only while marking."""
+        msg = LaserCommand()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.enable = self._state is NavState.LASER_HOLD
+        msg.pattern = self._laser_pattern
+        self._laser_pub.publish(msg)
+
     def _on_timer(self) -> None:
         self._publish_body_transform()
 
         # Once the land command is out, PX4 owns the vehicle in AUTO_LAND.
         # Publishing the offboard heartbeat then would fight that mode, so
-        # these two states are handled before the heartbeat is sent.
+        # these two states are handled without the heartbeat.
         if self._state in (NavState.LANDING, NavState.LANDED):
             self._handlers[self._state]()
-            return
+        else:
+            self._publish_offboard_control_mode()
+            self._handlers[self._state]()
 
-        self._publish_offboard_control_mode()
-        self._handlers[self._state]()
+        # After the handler, so the command reflects the state entered this tick.
+        self._publish_laser_command()
 
     def _current_position(self) -> Optional[Waypoint]:
         """Return the current position as a Waypoint, or None if not yet valid."""

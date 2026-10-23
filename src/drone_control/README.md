@@ -16,6 +16,10 @@ One node, `waypoint_navigator`, does both jobs:
 
 ---
 
+> **Going from simulation to the real X500 V2 / Pixhawk 6C / Jetson Orin Nano?**
+> Read [docs/HARDWARE_BRINGUP_GUIDE.md](docs/HARDWARE_BRINGUP_GUIDE.md) - wiring,
+> PX4 and Jetson setup, Wi-Fi ROS 2, bench tests and the first flights, step by step.
+
 ## Coordinate conventions
 
 PX4 works in a **local NED** frame, which is the single most common source of
