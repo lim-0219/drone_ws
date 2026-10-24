@@ -39,6 +39,7 @@ setup(
             'ground_station = drone_control.ground_station:main',
             'make_ground_texture = drone_control.make_ground_texture:main',
             'laser_control = drone_control.laser_control:main',
+            'make_grass_world = drone_control.make_grass_world:main',
             'csi_camera = drone_control.csi_camera_node:main',
         ],
     },

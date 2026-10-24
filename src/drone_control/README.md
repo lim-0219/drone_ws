@@ -565,6 +565,94 @@ PX4_GZ_WORLD=textured make px4_sitl gz_x500_survey
 
 (`make px4_sitl` once more also generates a `gz_x500_survey_textured` target.)
 
+### Grass + garbage-bag world: is stitching feasible on the real scene?
+
+`ros2 run drone_control make_grass_world` builds the scene the real flights will
+see: a mown **grass field** (generated texture: lush/dry patches, mowing
+stripes, bare soil, and the high-frequency detail a camera really sees - grass
+blades, clover and dandelion dots, fallen leaves - at 8192 px / 30 m = 273 px/m,
+above the camera's ~187 px/m at 5 m) with **35 Korean standard garbage bags**
+(5/10/20/30/50/75/100 L footprints, 9 colours, random heading, wrinkle / fold /
+knot / printed-text textures) scattered over a 16 x 16 m area around the target;
+`models/trash_bags/bags.json` records every bag's true NED position.
+
+```bash
+cd ~/PX4-Autopilot
+make px4_sitl gz_x500_survey_grass_bags      # or PX4_GZ_WORLD=grass_bags make px4_sitl gz_x500_survey
+```
+
+(The SITL airframe `4022_gz_x500_survey` now sets `NAV_DLL_ACT 0`, so the
+simulation arms without QGroundControl; the real-vehicle parameter file keeps
+the GCS requirement.)
+
+**Measured, two full missions (9 cells at 5 m, stitched through the web app):**
+
+| Scene | SIFT features / image | Pairs accepted | Outcome |
+|---|---|---|---|
+| Smooth grass texture (137 px/m, below camera sampling) + single-colour bags | 12-50 | 0 / 20 (`insufficient_mutual_matches`) | **fails** - disconnected match graph |
+| Detailed grass (273 px/m) + textured bags | 447-590 | **20 / 20**, inliers 34-134 | **succeeds** - 1467x1132 px, 91 % valid, edge error 0.04 px median, 1.8 s |
+
+Check of the successful map against the true bag positions
+(`tools/verify_bags_on_map.py`): 17 bags inside the mosaic, 16 detected at
+their projected position (mean offset 0.32 m, max 0.50 m - part of that is the
+shadow pulling the blob centroid); the one "miss" is a green bag on green grass
+that the simple colour test does not separate, it is visible in the map.
+
+What this says about the real flight: the stitcher needs texture, and the
+decisive quantity is **features per image after the camera samples the
+ground**. A real mown lawn at 5 m with a 1280 px camera is at least as textured
+as the detailed scene (real bags also have print, wrinkles and specular folds),
+so the geometry, overlap (50 %) and altitude of this mission are sufficient;
+the failure case tells you what to avoid - a uniform surface (fresh asphalt,
+water, snow, very short turf in flat light) or heavy motion blur. Tall bags
+(75-100 L, 0.4-0.5 m high) show faint double edges where frames overlap: a
+planar mosaic cannot model their height. That is cosmetic for marking, not a
+registration error.
+
+### Mission recording (video)
+
+[![mosaic mission on the grass + garbage-bag world, 2x](docs/media/grass_bags_mission_poster.jpg)](docs/media/grass_bags_mission.mp4)
+
+[`docs/media/grass_bags_mission.mp4`](docs/media/grass_bags_mission.mp4)
+(H.264 1600x660, 42 s at 2x = 83 s of mission, 1.7 MB) is one
+complete mission on the grass + garbage-bag world, recorded inside the
+simulation rather than from the screen. Left: the world's third-person
+`overview_camera` (a static 1280x720 camera that `make_grass_world` places
+south-west of the field, topic `/overview_camera/image`). Right: the drone's
+downward camera until the web app reports the session completed, then the
+stitched map. The status bar shows the PX4 mode and arming state, the local
+position and range-finder AGL, and the ground-station progress (frames n/9,
+session status). What you see: offboard take-off to 5 m, the nine cells in
+the stitcher's order (5,4,1,2,3,6,9,8,7; step 3.42 x 2.57 m), each frame sent
+to the ground station and uploaded to the web app as it is taken, the map
+stitched 3.0 s after the ninth frame (1465x1133 px), then landing and
+disarm.
+
+To record a run yourself (terminals 1-3 as below: agent, PX4 on
+`grass_bags`, web app; needs `ffmpeg`):
+
+```bash
+export GZ_IP=127.0.0.1 ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+python3 src/drone_control/tools/record_mission_video.py \
+    --output mission.mp4 --poster mission.png &
+ros2 launch drone_control mosaic_mission.launch.py rviz:=false after_mosaic:=land \
+    target_x:=5.0 target_y:=0.0 target_altitude:=5.0
+```
+
+The recorder reads both camera streams straight from Gazebo with the
+gz-transport Python bindings (`python3-gz-transport13`, `python3-gz-msgs10`,
+installed with Harmonic) instead of a ros_gz bridge: the 2.8 MB overview
+frames at 10 Hz did not get through CycloneDDS on the default socket buffers
+even with a RELIABLE subscription (about one frame per 30 s), while
+gz-transport delivers them complete over TCP. PX4 state comes from
+`/fmu/out/vehicle_status_v4` and `/fmu/out/vehicle_local_position_v1`, the
+session progress from `GET /api/sessions/latest`. It stops by itself 3 s
+after the vehicle disarms once the session is completed or failed (at the
+latest `--after-complete` 45 s after completion), and ignores sessions
+created before it started, so the web app can stay up between runs.
+Frames are composed at 10 Hz and piped to ffmpeg; nothing in the mission
+itself is changed by recording.
+
 ### Running the mosaic mission
 
 Terminals 1-3 as for the survey mission (agent, PX4, QGroundControl) but
@@ -636,11 +724,14 @@ and the texture mapping (image right = East, top = North).
   `(NAVIGATE, CAPTURE) x 9 -> HOLD`, nine frames with correct sequence, cell,
   pose, AGL and spacing.
 
-Not yet verified: the real Gazebo camera orientation (see the assumption
-above) and the stitcher's behaviour on the Gazebo ground texture - the
-default world is a fairly uniform plane; if SIFT finds too few features the
-stitch fails with `diagnostics.json` listing the rejected pairs. Fly over a
-textured area (or add ground objects to the world) for a meaningful mosaic.
+**Live, in SITL (grass + garbage-bag world), recorded.** The same mission on
+the realistic scene: 9/9 frames, map stitched by the web app 3.0 s after the
+last frame (1465x1133 px), landing and disarm - the file is under "Mission
+recording (video)" above, the feature counts and the bag-position check
+under "Grass + garbage-bag world". The default PX4 world is a fairly uniform
+plane; if SIFT finds too few features the stitch fails with
+`diagnostics.json` listing the rejected pairs - fly over a textured area (or
+add ground objects to the world) for a meaningful mosaic.
 
 ---
 
