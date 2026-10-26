@@ -16,9 +16,11 @@ One node, `waypoint_navigator`, does both jobs:
 
 ---
 
-> **Going from simulation to the real X500 V2 / Pixhawk 6C / Jetson Orin Nano?**
-> Read [docs/HARDWARE_BRINGUP_GUIDE.md](docs/HARDWARE_BRINGUP_GUIDE.md) - wiring,
-> PX4 and Jetson setup, Wi-Fi ROS 2, bench tests and the first flights, step by step.
+> **Going from simulation to the real X500 V2 / Pixhawk 6C / Raspberry Pi 5 /
+> Arducam B0353?** Read [docs/HARDWARE_BRINGUP_GUIDE.md](docs/HARDWARE_BRINGUP_GUIDE.md) -
+> wiring, PX4 and Pi setup, camera, Wi-Fi ROS 2, bench tests and the first
+> flights, step by step. The mission geometry (20 x 10 m mosaic, 6.25 m AGL with
+> the B0353) is in *Real camera and the 20 x 10 m mosaic* below.
 
 ## Coordinate conventions
 
@@ -112,7 +114,11 @@ All `/fmu` publishers and subscribers use the profile the working `px4_ros_com`
 example uses: `BEST_EFFORT`, `TRANSIENT_LOCAL`, `KEEP_LAST` depth 1. The
 Gazebo-bridged sensor topics are subscribed with `qos_profile_sensor_data`
 (best effort) for the small range scan, and a RELIABLE profile for the camera
-image - see "Large camera images over DDS".
+image - see "Large camera images over DDS". On the real vehicle the
+`survey_camera` node *publishes* the image RELIABLE / VOLATILE / KEEP_LAST 1
+as well, matching the navigator's subscription (a best-effort publisher would
+lose whole 6.9 MB frames on the default socket buffers). Check on the Pi with
+`ros2 topic info -v /survey/camera/image`: both endpoints must say RELIABLE.
 
 ---
 
@@ -152,8 +158,8 @@ remain, otherwise to the final action.
 | `IDLE` | Streams `offboard_control_mode` + a hold-station setpoint, then requests OFFBOARD and ARM (in that order), retrying ~1 Hz | `nav_state == OFFBOARD` **and** `arming_state == ARMED` |
 | `TAKEOFF` | Climbs **vertically**: keeps the current x/y, targets the first waypoint's altitude and yaw | target held within `position_tolerance` for `reach_hold_time` |
 | `NAVIGATE` | Commands the current waypoint; advances on arrival | last waypoint reached |
-| `HOLD` | Hovers at the last waypoint | terminal |
-| `CAPTURE` | Hovers, waits `capture_settle_time`, saves one camera frame (PNG + JSON) and publishes it as a `CapturedFrame` | photo saved, or `capture_timeout` elapsed (warning) -> next waypoint or final action |
+| `HOLD` | Hovers at the last waypoint, or at the cell whose photo failed | terminal (take over by RC, or relaunch) |
+| `CAPTURE` | Hovers, waits `capture_settle_time`, saves one camera frame (PNG + JSON, written in a background thread) and publishes it as a `CapturedFrame` | photo saved -> next waypoint or final action. No usable frame within `capture_timeout`: settle again and retry, up to `capture_attempts` per cell; then **HOLD at that cell** (the stitcher needs every frame, so the mission does not continue with a hole) |
 | `LASER_HOLD` | Hovers and publishes the laser beam / ground triangle markers | terminal |
 | `LANDING` | Sends `VEHICLE_CMD_NAV_LAND` once and **stops** the offboard heartbeat so PX4 keeps AUTO_LAND | `arming_state == DISARMED` |
 | `LANDED` | Terminal | - |
@@ -181,9 +187,12 @@ reached when the 3D distance stays within `position_tolerance` continuously for
 | `target_altitude` | double | `0.0` | Target altitude above the origin, metres, **positive-up** |
 | `target_yaw` | double | `0.0` | Heading at the target (mosaic: held for the whole grid; grid +Y points this way) |
 | **Mosaic** | | | *`final_action=mosaic`; the target is grid cell 5* |
-| `mosaic_overlap` | double | `0.5` | Footprint fraction shared by neighbouring cells |
-| `mosaic_spacing_x`, `mosaic_spacing_y` | double | `0.0` | Explicit grid step (m) along image right / top; 0 = `footprint * (1 - overlap)` |
-| `camera_hfov_rad`, `image_width`, `image_height` | double, int, int | `1.2`, `1280`, `960` | Camera model used for the footprint (= the SDF) |
+| `mosaic_extent_x`, `mosaic_extent_y` | double | `0.0` | Wanted stitched size (m) along image right / top. Set (both launches use 20 x 10): step = `(extent - footprint) / 2`; `target_altitude <= 0` then derives the altitude from `mosaic_overlap` along X. 0 = legacy step below |
+| `mosaic_min_overlap` | double | `0.3` | Refuse to start if either axis would overlap less than this (the error names the altitude range that works) |
+| `mosaic_overlap` | double | `0.5` | Footprint fraction shared by neighbouring cells (legacy step `footprint * (1 - overlap)`; with an extent, the X overlap used to derive the altitude) |
+| `mosaic_spacing_x`, `mosaic_spacing_y` | double | `0.0` | Explicit grid step (m) along image right / top; overrides both modes above |
+| `camera_hfov_rad`, `image_width`, `image_height` | double, int, int | `1.2`, `1280`, `960` | Camera model used for the footprint (SITL: the SDF; real: `1.3495`, `1920`, `1200` for the B0353, see `mosaic_plan`) |
+| `camera_info_topic` | string | `''` | Real camera: compare the calibration's `fx` with `camera_hfov_rad` once and warn if they differ by > 2 % |
 | `after_mosaic` | string | `hover` | `hover` or `land` after the ninth frame |
 | `frame_topic` | string | `/survey/frames` | `drone_control_msgs/CapturedFrame` to the ground station |
 | `session_id` | string | `''` | Session name; empty = `session_<UTC time>` |
@@ -194,7 +203,8 @@ reached when the 3D distance stays within `position_tolerance` continuously for
 | **Photo** | | | |
 | `photo_dir` | string | `~/drone_survey_photos` | Output directory (created) |
 | `capture_settle_time` | double | `2.0` | Hover seconds before the photo |
-| `capture_timeout` | double | `30.0` | Give up waiting for an image after this |
+| `capture_timeout` | double | `30.0` | Seconds to wait for a frame per attempt |
+| `capture_attempts` | int | `3` | Attempts per cell (each settles again); exhausted -> `HOLD` at the cell |
 | **Laser triangle** | | | |
 | `laser_half_angle_deg` | double | `15.0` | Tilt of each beam from straight down |
 | `laser_mount_radius` | double | `0.08` | Emitter distance from the body origin, m (= SDF) |
@@ -427,10 +437,64 @@ dN = -sin(yaw) * X + cos(yaw) * Y
 dE =  cos(yaw) * X + sin(yaw) * Y
 ```
 
-Cell step = camera footprint x (1 - `mosaic_overlap`). With the survey camera
-(`horizontal_fov` 1.2 rad, 1280x960) at 5 m the footprint is 6.84 x 5.13 m, so
-the default 50 % overlap gives a 3.42 x 2.57 m step and a mosaic of roughly
-13.7 x 10.3 m. The yaw is held constant over the whole grid.
+The grid is sized for the wanted stitched area (`mosaic_extent_x/y`,
+default **20 x 10 m** in both launch files): cell step =
+`(extent - footprint) / 2` per axis, footprint = `2 h tan(hfov/2)` along the
+image width and `x H/W` along its height
+(`drone_control/mosaic_plan.py`, shared with the `mosaic_plan` CLI). The
+node refuses to start when the altitude makes either axis overlap less than
+`mosaic_min_overlap` (too low) or one footprint already exceeds the extent
+(too high), and prints the altitude range that works. With the SITL camera
+(`horizontal_fov` 1.2 rad, 1280x960) the default 7.5 m gives a
+10.26 x 7.70 m footprint, a 4.87 x 1.15 m step and 53 % / 85 % overlap;
+`mosaic_extent_x:=0 mosaic_extent_y:=0` restores the old
+`footprint x (1 - mosaic_overlap)` step (5 m: 6.84 x 5.13 m footprint,
+3.42 x 2.57 m step, ~13.7 x 10.3 m mosaic). The yaw is held constant over the
+whole grid; the 20 m side runs along image right = body right, so with
+`target_yaw:=0` it runs East-West.
+
+### Real camera and the 20 x 10 m mosaic
+
+The vehicle carries an **Arducam B0353** (AR0234 2.3 MP colour global
+shutter, 1920 x 1200 px of 3.0 um, 3.6 mm F/3.0 M12 lens) looking down,
+driven by `survey_camera` on the Raspberry Pi 5. As a pinhole:
+`fx = 3.6 mm / 3.0 um = 1200 px`, `hfov = 2 atan(960/1200) = 77.3 deg =
+1.3495 rad`, `vfov = 53.1 deg`, footprint `1.6 h x 1.0 h`. Arducam's
+brochure quotes 90 deg (H): a wide-angle lens with barrel distortion covers
+more at the edges than the paraxial focal length says, so the pinhole value
+is the *conservative* one (if the real field is wider the cells simply
+overlap more) and stays the default until a checkerboard calibration
+replaces it (`camera_hfov_rad = 2 atan(W / (2 fx))` from the YAML; the
+navigator warns at start-up if the published `CameraInfo` disagrees).
+
+`ros2 run drone_control mosaic_plan` (or `python3 -m drone_control.mosaic_plan`
+on any machine) prints the table; the default flight is the line marked
+"recommended":
+
+| AGL | footprint (m) | step (m) | overlap X / Y | GSD | note |
+|-----|---------------|----------|---------------|-----|------|
+| 5.0 | 8.0 x 5.0 | - | 25 % along X | 4.2 mm | refused (below 30 %) |
+| 5.5 | 8.8 x 5.5 | 5.60 x 2.25 | 36 % / 59 % | 4.6 mm | lowest usable |
+| **6.25** | **10.0 x 6.25** | **5.00 x 1.875** | **50 % / 70 %** | **5.2 mm** | **default (`drone_onboard.launch.py`)** |
+| 7.0 | 11.2 x 7.0 | 4.40 x 1.50 | 61 % / 79 % | 5.8 mm | |
+| 9.5 | 15.2 x 9.5 | 2.40 x 0.25 | 84 % / 97 % | 7.9 mm | highest usable |
+| 10.0 | 16.0 x 10.0 | - | - | - | refused (one frame already 10 m tall) |
+
+So the mission flies **6.25 m above the takeoff point** (`target_altitude`
+default; `0` derives it from the extent and `mosaic_overlap`), visits the
+nine cells 5.0 m apart along body right and 1.875 m apart along body
+forward, and the stitched map is 20 x 10 m at a 5.2 mm ground sampling
+distance - 3000 x 1500 px at the 150 px/m in `config/stitch_config.json`
+(the full GSD would be ~190 px/m; raise `pixels_per_meter` if you want it,
+the 24 Mpx canvas limit allows up to ~340 px/m). Should the calibrated field
+of view come out at the brochure's 90 deg, the same 6.25 m gives a
+12.5 x 7.8 m footprint, a 3.75 x 1.09 m step and 70 % / 86 % overlap - still
+exactly 20 x 10 m.
+
+The ground must be textured over the whole 20 x 10 m (plus the footprint
+margin, i.e. a ~25 x 15 m clear area): grass, gravel, leaves are fine;
+uniform asphalt, water or snow are not (see the SITL bag-world experiment
+below).
 
 **Camera orientation assumption.** The camera link is pitched +90 deg about
 body y, so by Gazebo's camera convention (optical axis +x, image right = -y,
@@ -623,7 +687,8 @@ downward camera until the web app reports the session completed, then the
 stitched map. The status bar shows the PX4 mode and arming state, the local
 position and range-finder AGL, and the ground-station progress (frames n/9,
 session status). What you see: offboard take-off to 5 m, the nine cells in
-the stitcher's order (5,4,1,2,3,6,9,8,7; step 3.42 x 2.57 m), each frame sent
+the stitcher's order (5,4,1,2,3,6,9,8,7; recorded with the old 5 m / 3.42 x 2.57 m
+grid), each frame sent
 to the ground station and uploaded to the web app as it is taken, the map
 stitched 3.0 s after the ninth frame (1465x1133 px), then landing and
 disarm.
@@ -636,7 +701,7 @@ export GZ_IP=127.0.0.1 ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 python3 src/drone_control/tools/record_mission_video.py \
     --output mission.mp4 --poster mission.png &
 ros2 launch drone_control mosaic_mission.launch.py rviz:=false after_mosaic:=land \
-    target_x:=5.0 target_y:=0.0 target_altitude:=5.0
+    target_x:=5.0 target_y:=0.0
 ```
 
 The recorder reads both camera streams straight from Gazebo with the
@@ -678,13 +743,15 @@ source ~/drone_ws/install/setup.bash
 export CYCLONEDDS_URI=file://$HOME/drone_ws/install/drone_control/share/drone_control/config/cyclonedds.xml
 
 ros2 launch drone_control mosaic_mission.launch.py \
-    target_x:=5.0 target_y:=0.0 target_altitude:=5.0 target_yaw:=0.0 mosaic_overlap:=0.5
+    target_x:=5.0 target_y:=0.0 target_altitude:=7.5 target_yaw:=0.0
 ```
 
-Expected log (abridged):
+(20 x 10 m grid by default; `target_altitude:=5.0 mosaic_extent_x:=0
+mosaic_extent_y:=0` flies the old 13.7 x 10.3 m one.) Expected log (abridged):
 
 ```
-[waypoint_navigator] mosaic: session=session_... 9 cells, spacing X=3.42m Y=2.57m, frames -> /survey/frames
+[waypoint_navigator] mosaic: session=session_... 9 cells, spacing X=4.87m Y=1.15m, frames -> /survey/frames, after_mosaic=hover, 3 capture attempt(s) per cell then HOLD
+[waypoint_navigator] mosaic plan: altitude 7.50 m (parameter; valid 6.09-9.74 m), footprint 10.26 x 7.70 m, grid step 4.87 x 1.15 m, overlap 53 % / 85 %, mosaic 20.0 x 10.0 m, GSD 8.0 mm/px
 [ground_station]     listening on /survey/frames; sessions -> /home/.../drone_survey_sessions
 [waypoint_navigator] STATE NAVIGATE -> CAPTURE (photo requested at grid5)
 [waypoint_navigator] Photo 1/9 saved: ...   Frame 1/9 (cell 5) sent to /survey/frames
@@ -695,14 +762,41 @@ Expected log (abridged):
 [ground_station]     session_...: stitch OK in 9.1s -> .../stitch_01/map.png [1370, 1030] px, valid 93%
 ```
 
-RViz (`config/mosaic.rviz`) shows the live camera, the stitched map and the
-overview with the nine outlines. To run the ground station on another PC:
+RViz (`config/mosaic.rviz`) shows the stitched map and the overview with the
+nine outlines; the live-camera display is in the config but **disabled** -
+on the ground PC of the real vehicle it would pull 6.9 MB frames over Wi-Fi.
+Tick it in SITL if you want to watch the camera.
+
+To rehearse the capture-retry path in SITL, stop the bridge mid-mission
+(`bridge:=false`, or kill `parameter_bridge` after the first frames): the
+navigator logs `Capture attempt 1/3 ... failed`, settles and retries, and
+after the third failure `STATE CAPTURE -> HOLD (capture failed at gridN)` -
+it hovers there instead of flying on. Restart the bridge before the last
+attempt and the mission continues normally. To run the ground station on another PC:
 same `ROS_DOMAIN_ID`/RMW, `ros2 run drone_control ground_station` there, and
 `ground_station:=false` in the launch here.
 
 ### Verified
 
-**Live, in SITL (textured world).** A full mission flew the nine cells, every
+**Live, in SITL (textured world), 20 x 10 m grid (2026-10-26).** With the
+default `mosaic_mission.launch.py` arguments (7.5 m, extent 20 x 10 m ->
+4.87 x 1.15 m step, 53 % / 85 % overlap) the vehicle took off, captured the
+nine cells in 41 s of flight (~5 s per cell, frames at 5 Hz), landed and
+disarmed; the ground station stitched the real Gazebo frames through the CLI
+stitcher in 10.0 s into a 3136 x 1699 px map (20.9 x 11.3 m at 150 px/m,
+89 % valid), the world's E/N labels running continuously E-10..E+9 and
+N+0..N+9 around the target, North up, the nine outlines in the flown
+7-8-9 / 4-5-6 / 1-2-3 layout and the optimised cell centres within 0.3 m of
+the commanded 4.87 x 1.15 m grid. Then, with `bridge:=false
+capture_timeout:=8`, the same mission reached cell 5, logged
+`Capture attempt 1/3 ... failed`, `2/3 ... failed`,
+`No photo at grid5 after 3 attempt(s)` and went `CAPTURE -> HOLD (capture
+failed at grid5)`, hovering at N 5.02 / E -0.01 / 7.50 m (PX4 local
+position) instead of flying on. Nothing in this run needed the stitcher web
+app. Not verifiable in SITL: the camera publisher QoS (the bridge, not
+`survey_camera`, publishes here) - check `ros2 topic info -v` on the Pi.
+
+**Live, in SITL (textured world), original 5 m grid.** A full mission flew the nine cells, every
 frame reached the ground station, and the real Gazebo photos stitched into a
 1402x1080 px map (14.0 x 10.8 m at 100 px/m, 94 % valid) in 18.9 s: 20/20
 overlap constraints, edge median error 0.09 px (limit 4 px), the nine
@@ -868,7 +962,10 @@ than by retrying.
 
 ## Large camera images over DDS
 
-Three layers, from the proper fix to the mitigations that are already in place:
+Three layers, from the proper fix to the mitigations that are already in place.
+On the Raspberry Pi 5 the same applies to the loopback path from
+`survey_camera` to the navigator: a 1920x1200 rgb8 frame is 6.9 MB
+(~4,700 fragments), so do step 1 on the Pi as part of its setup.
 
 **1. Kernel receive buffer (needs sudo, once).** This is the fix the ROS 2
 "DDS tuning" guide gives for exactly this symptom:

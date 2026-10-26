@@ -7,7 +7,7 @@
   "min_inliers": 18,
   "diagonals": true,
   "match_all": false,
-  "pixels_per_meter": 100.0,
+  "pixels_per_meter": 150.0,
   "max_canvas_megapixels": 24.0,
   "opencv_threads": 4
 }

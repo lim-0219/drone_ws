@@ -40,7 +40,8 @@ setup(
             'make_ground_texture = drone_control.make_ground_texture:main',
             'laser_control = drone_control.laser_control:main',
             'make_grass_world = drone_control.make_grass_world:main',
-            'csi_camera = drone_control.csi_camera_node:main',
+            'survey_camera = drone_control.camera_node:main',
+            'mosaic_plan = drone_control.mosaic_plan:main',
         ],
     },
 )

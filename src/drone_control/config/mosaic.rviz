@@ -4,7 +4,6 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /Survey camera1
         - /Mosaic map1
       Splitter Ratio: 0.5
     Tree Height: 500
@@ -49,11 +48,11 @@ Visualization Manager:
       Update Interval: 0
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Survey camera
+      Name: Survey camera (OFF - 6.9 MB/frame; enable in SITL only, never over Wi-Fi)
       Normalize Range: true
       Topic:
         Depth: 1

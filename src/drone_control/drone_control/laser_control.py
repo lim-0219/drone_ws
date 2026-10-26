@@ -3,10 +3,11 @@
 Laser and servo payload controller for the real vehicle (mock backend for SITL).
 
 Hardware (from the purchase list): three 5 V line lasers switched by a
-4-channel MOSFET board from Jetson GPIO (3.3 V logic, 10 kOhm pull-downs so
-the lasers stay off while the Jetson boots), a physical kill switch on the
-laser DC branch, and three FS90MG servos on Pixhawk AUX outputs that move
-the emitters between the "triangle" and "line" arrangement.
+4-channel MOSFET board from Raspberry Pi 5 GPIO (3.3 V logic, 10 kOhm
+pull-downs so the lasers stay off while the Pi boots), a physical kill
+switch on the laser DC branch, and three FS90MG servos on Pixhawk AUX
+outputs that move the emitters between the "triangle" and "line"
+arrangement.
 
 Interlocks - every one of them must hold for a laser to be switched on:
 
@@ -23,7 +24,12 @@ of this and is the only thing you should rely on when people are nearby.
 Servos are driven through PX4: assign the AUX outputs the "Peripheral via
 Actuator Set 1..3" functions in QGroundControl (Vehicle Setup -> Actuators),
 then this node sends ``VEHICLE_CMD_DO_SET_ACTUATOR`` (param1..6 = values in
-[-1, 1], param7 = 0) whenever the requested pattern changes.
+[-1, 1], param7 = 0) whenever the requested pattern changes - but only when
+``servo_enable`` is true (default false, so a run that is not about the
+laser payload never moves the mechanism).
+
+The launch file does not start this node unless ``laser:=true``; a mission
+run without it simply has nobody listening on ``/laser/command``.
 """
 
 from __future__ import annotations
@@ -59,33 +65,40 @@ class MockGpio:
         self.set_all(False)
 
 
-class JetsonGpio:
-    """Real pins through Jetson.GPIO (BOARD numbering = the 40-pin header)."""
+class RpiGpio:
+    """
+    Real pins through gpiozero (BCM numbering).
+
+    gpiozero knows the Pi 5's RP1 GPIO controller (the ``/dev/gpiochip*``
+    number changed between kernel versions; its lgpio backend resolves it).
+    Pre-installed on Raspberry Pi OS; elsewhere
+    ``sudo apt install python3-gpiozero python3-lgpio``.
+    """
 
     def __init__(self, logger, pins: List[int], active_high: bool) -> None:
-        import Jetson.GPIO as GPIO  # noqa: N814 - library name
-        self._gpio = GPIO
-        self._pins = pins
-        self._active_high = active_high
+        from gpiozero import DigitalOutputDevice
         self._logger = logger
-        GPIO.setmode(GPIO.BOARD)
-        off = GPIO.LOW if active_high else GPIO.HIGH
-        GPIO.setup(pins, GPIO.OUT, initial=off)
+        self._pins = pins
+        self._outputs = [DigitalOutputDevice(pin, active_high=active_high, initial_value=False)
+                         for pin in pins]
         self._on = False
-        logger.info(f'laser GPIO backend: Jetson.GPIO BOARD pins {pins}, '
-                    f'active_high={active_high}')
+        logger.info(f'laser GPIO backend: gpiozero BCM pins {pins}, active_high={active_high}')
 
     def set_all(self, on: bool) -> None:
         if on == self._on:
             return
         self._on = on
-        level = self._gpio.HIGH if (on == self._active_high) else self._gpio.LOW
-        self._gpio.output(self._pins, level)
+        for output in self._outputs:
+            if on:
+                output.on()
+            else:
+                output.off()
         self._logger.info(f'laser pins {self._pins} -> {"ON" if on else "off"}')
 
     def close(self) -> None:
         self.set_all(False)
-        self._gpio.cleanup(self._pins)
+        for output in self._outputs:
+            output.close()
 
 
 class LaserControl(Node):
@@ -95,14 +108,14 @@ class LaserControl(Node):
         super().__init__('laser_control')
         self.declare_parameter('hardware_enable', False)
         self.declare_parameter('interlock_bypass', False)   # bench tests only, never in flight
-        self.declare_parameter('backend', 'mock')
-        self.declare_parameter('laser_pins', [7, 29, 31])
+        self.declare_parameter('backend', 'mock')           # 'mock' or 'rpi'
+        self.declare_parameter('laser_pins', [17, 27, 22])  # BCM; header pins 11, 13, 15
         self.declare_parameter('active_high', True)
         self.declare_parameter('command_topic', '/laser/command')
         self.declare_parameter('state_topic', '/laser/state')
         self.declare_parameter('command_timeout_s', 1.0)
         self.declare_parameter('min_altitude_m', 0.5)
-        self.declare_parameter('servo_enable', True)
+        self.declare_parameter('servo_enable', False)
         self.declare_parameter('servo_triangle', [-1.0, -1.0, -1.0])
         self.declare_parameter('servo_line', [1.0, 1.0, 1.0])
         self.declare_parameter('px4_namespace', '')
@@ -113,12 +126,12 @@ class LaserControl(Node):
         backend = str(self.get_parameter('backend').value).strip().lower()
         pins = [int(v) for v in self.get_parameter('laser_pins').value]
         active_high = bool(self.get_parameter('active_high').value)
-        if backend == 'jetson':
-            self._gpio = JetsonGpio(self.get_logger(), pins, active_high)
+        if backend == 'rpi':
+            self._gpio = RpiGpio(self.get_logger(), pins, active_high)
         elif backend == 'mock':
             self._gpio = MockGpio(self.get_logger(), pins, active_high)
         else:
-            raise ValueError('"backend" must be "mock" or "jetson"')
+            raise ValueError('"backend" must be "mock" or "rpi"')
         self._command_timeout = float(self.get_parameter('command_timeout_s').value)
         self._min_altitude = float(self.get_parameter('min_altitude_m').value)
         self._servo_enable = bool(self.get_parameter('servo_enable').value)
@@ -161,7 +174,9 @@ class LaserControl(Node):
             f'laser_control: hardware_enable={self._hardware_enable} backend={backend} '
             f'servo_enable={self._servo_enable}' + (
                 '' if self._hardware_enable else '  (lasers will never fire until '
-                'hardware_enable:=true)'))
+                'hardware_enable:=true)') + (
+                '' if self._servo_enable else '  (servos will not move until '
+                'servo_enable:=true)'))
         if self._interlock_bypass:
             self.get_logger().warn(
                 'interlock_bypass is TRUE: armed/airborne checks are OFF. Bench use only - '

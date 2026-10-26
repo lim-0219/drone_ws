@@ -2,10 +2,19 @@
 Launch the 9-frame mosaic mission: Gazebo bridge + navigator + ground station + RViz.
 
 Requires PX4 SITL running the x500_survey model (`make px4_sitl gz_x500_survey`),
-the uXRCE-DDS agent, and the stitcher venv (`src/drone-stitching/.venv`).  Example::
+the uXRCE-DDS agent, and the stitcher venv (`src/drone-stitching/.venv`).
+
+The grid is sized like the real mission: a 20 x 10 m stitched area
+(`mosaic_extent_x/y`), the step following from the camera footprint at the
+flight altitude.  The Gazebo camera (hfov 1.2 rad, 1280x960) sees
+10.3 x 7.7 m from 7.5 m, hence the default altitude; `ros2 run drone_control
+mosaic_plan --gazebo --altitude 7.5` prints the numbers.  Example::
 
     ros2 launch drone_control mosaic_mission.launch.py \
-        target_x:=5.0 target_y:=0.0 target_altitude:=5.0 mosaic_overlap:=0.5
+        target_x:=5.0 target_y:=0.0 target_altitude:=7.5
+
+`mosaic_extent_x:=0 mosaic_extent_y:=0` restores the old footprint*(1-overlap)
+step; `target_altitude:=0` derives the altitude from the extent and overlap.
 
 The ground station can also run on another machine: start it there with
 `ros2 run drone_control ground_station` (same ROS_DOMAIN_ID) and pass
@@ -47,15 +56,23 @@ def generate_launch_description() -> LaunchDescription:
                               description='Cell-5 North coordinate in metres (NED x).'),
         DeclareLaunchArgument('target_y', default_value='0.0',
                               description='Cell-5 East coordinate in metres (NED y).'),
-        DeclareLaunchArgument('target_altitude', default_value='5.0',
-                              description='Flight altitude above the takeoff point, metres.'),
+        DeclareLaunchArgument('target_altitude', default_value='7.5',
+                              description='Flight altitude above the takeoff point, metres '
+                                          '(0 = derive from mosaic_extent_x and mosaic_overlap).'),
         DeclareLaunchArgument('target_yaw', default_value='0.0',
                               description='Heading held for the whole grid (deg, NED, 0=N). '
                                           'The grid +Y axis points this way.'),
+        DeclareLaunchArgument('mosaic_extent_x', default_value='20.0',
+                              description='Stitched size along image right (X), metres; '
+                                          'step = (extent - footprint) / 2. 0 = use overlap.'),
+        DeclareLaunchArgument('mosaic_extent_y', default_value='10.0',
+                              description='Stitched size along image top (Y), metres.'),
         DeclareLaunchArgument('mosaic_overlap', default_value='0.5',
-                              description='Fraction of the camera footprint shared by '
-                                          'neighbouring cells; grid step = '
-                                          'footprint * (1 - overlap).'),
+                              description='Footprint fraction shared by neighbouring cells: '
+                                          'the step when no extent is given, the X overlap '
+                                          'used to derive the altitude when target_altitude=0.'),
+        DeclareLaunchArgument('mosaic_min_overlap', default_value='0.3',
+                              description='Refuse to fly a grid with less overlap than this.'),
         DeclareLaunchArgument('mosaic_spacing_x', default_value='0.0',
                               description='Explicit grid step along image right, metres '
                                           '(0 = derive from footprint and overlap).'),
@@ -70,12 +87,18 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('position_tolerance', default_value='0.3'),
         DeclareLaunchArgument('reach_hold_time', default_value='1.0'),
         DeclareLaunchArgument('capture_settle_time', default_value='2.0'),
+        DeclareLaunchArgument('capture_timeout', default_value='30.0',
+                              description='Seconds to wait for a frame per attempt.'),
+        DeclareLaunchArgument('capture_attempts', default_value='3',
+                              description='Attempts per cell; then the mission HOLDs there.'),
         DeclareLaunchArgument('photo_dir', default_value='~/drone_survey_photos',
                               description='Drone-side copy of every photo (PNG + JSON).'),
         # ground station
         DeclareLaunchArgument('ground_station', default_value='true',
                               description='Run the ground station here (false if it runs on '
                                           'another machine).'),
+        DeclareLaunchArgument('fallback_agl_m', default_value='7.5',
+                              description='Reference AGL if cell 5 had no valid range.'),
         DeclareLaunchArgument('output_root', default_value='~/drone_survey_sessions',
                               description='Ground-station session folders.'),
         DeclareLaunchArgument('stitch_project_dir',
@@ -124,7 +147,10 @@ def generate_launch_description() -> LaunchDescription:
             'target_altitude': _typed('target_altitude', float),
             'target_yaw': _typed('target_yaw', float),
             'yaw_in_degrees': True,
+            'mosaic_extent_x': _typed('mosaic_extent_x', float),
+            'mosaic_extent_y': _typed('mosaic_extent_y', float),
             'mosaic_overlap': _typed('mosaic_overlap', float),
+            'mosaic_min_overlap': _typed('mosaic_min_overlap', float),
             'mosaic_spacing_x': _typed('mosaic_spacing_x', float),
             'mosaic_spacing_y': _typed('mosaic_spacing_y', float),
             'camera_hfov_rad': CAMERA_HFOV_RAD,
@@ -135,6 +161,8 @@ def generate_launch_description() -> LaunchDescription:
             'position_tolerance': _typed('position_tolerance', float),
             'reach_hold_time': _typed('reach_hold_time', float),
             'capture_settle_time': _typed('capture_settle_time', float),
+            'capture_timeout': _typed('capture_timeout', float),
+            'capture_attempts': _typed('capture_attempts', int),
             'camera_topic': GZ_CAMERA_TOPIC,
             'range_topic': GZ_RANGE_TOPIC,
             'photo_dir': _typed('photo_dir', str),
@@ -157,7 +185,9 @@ def generate_launch_description() -> LaunchDescription:
             'stitch_backend': _typed('stitch_backend', str),
             'webapp_url': _typed('webapp_url', str),
             'camera_hfov_rad': CAMERA_HFOV_RAD,
-            'fallback_agl_m': _typed('target_altitude', float),
+            # Only used when cell 5 had no usable AGL; target_altitude:=0
+            # (derived altitude) would be rejected, so fall back to 7.5 then.
+            'fallback_agl_m': _typed('fallback_agl_m', float),
         }],
     )
 

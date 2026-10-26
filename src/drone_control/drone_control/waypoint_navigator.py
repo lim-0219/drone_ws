@@ -17,6 +17,13 @@ parameters) in PX4 offboard mode and then, depending on ``final_action``:
   is taken.  The ground station builds the ``drone_stitch`` manifest and runs
   the stitcher once all nine frames are in.
 
+  The grid is sized from the wanted mosaic (``mosaic_extent_x/y``, default
+  20 x 10 m) and the camera footprint at the flight altitude
+  (:mod:`drone_control.mosaic_plan`); the stitcher needs *exactly* nine
+  frames, so a cell whose photo fails is retried ``capture_attempts`` times
+  and, if it still fails, the vehicle holds position there instead of
+  flying on with a hole in the set.
+
 Coordinate convention
 ---------------------
 PX4 works in a local NED frame: x = North, y = East, z = Down.  "Down" means a
@@ -64,6 +71,7 @@ from enum import Enum
 import json
 import math
 import os
+import threading
 import time
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
@@ -75,6 +83,7 @@ from drone_control.laser_triangle import (
     ned_to_enu,
     triangle_side,
 )
+from drone_control.mosaic_plan import camera_footprint, MosaicPlan, plan_mosaic
 from drone_control_msgs.msg import CapturedFrame, LaserCommand
 from geometry_msgs.msg import Point, TransformStamped
 from px4_msgs.msg import (
@@ -94,7 +103,7 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
-from sensor_msgs.msg import Image, LaserScan
+from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import ColorRGBA
 from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
@@ -162,10 +171,16 @@ class NavState(Enum):
                               `reach_hold_time` seconds, waypoints remain
     NAVIGATE   -> CAPTURE   : a waypoint flagged `capture` reached (the survey
                               target, or every cell of the mosaic grid)
-    CAPTURE    -> NAVIGATE  : photo saved (or `capture_timeout` elapsed, with a
-                              warning) AND waypoints remain
-    CAPTURE    -> <final>   : photo saved / timed out AND it was the last
-                              waypoint - see "final" below
+    CAPTURE    -> CAPTURE   : no usable frame within `capture_timeout` (or the
+                              photo could not be converted) and attempts
+                              remain: settle again and retry, same cell
+    CAPTURE    -> NAVIGATE  : photo saved AND waypoints remain
+    CAPTURE    -> <final>   : photo saved AND it was the last waypoint - see
+                              "final" below
+    CAPTURE    -> HOLD      : `capture_attempts` failures at one cell: the
+                              stitcher needs every frame, so the mission
+                              stops and the vehicle hovers at that cell
+                              (terminal; take over by RC or restart)
     NAVIGATE   -> <final>   : last waypoint reached and it needs no capture
     <final>                 : HOLD       if final_action == 'hover'
                               LANDING    if final_action == 'land'
@@ -274,16 +289,6 @@ def grid_cell(grid_id: int) -> Tuple[int, int]:
     return (grid_id - 1) % 3 - 1, (grid_id - 1) // 3 - 1
 
 
-def camera_footprint(agl: float, hfov: float, width: int, height: int) -> Tuple[float, float]:
-    """
-    Compute the ground area seen by a nadir pinhole camera (along image u, along v).
-
-    u = 2 * agl * tan(hfov / 2); square pixels give v = u * height / width.
-    """
-    along_u = 2.0 * agl * math.tan(hfov / 2.0)
-    return along_u, along_u * height / width
-
-
 def mosaic_waypoints(centre: Waypoint, spacing: Tuple[float, float],
                      heading: float) -> List[Waypoint]:
     """
@@ -379,6 +384,12 @@ class WaypointNavigator(Node):
             depth=1,
         )
         self.create_subscription(Image, self._camera_topic, self._on_camera_image, camera_qos)
+        # Real camera only: compare the calibration's fx with camera_hfov_rad
+        # (the grid was laid out from the latter) and warn if they disagree.
+        self._camera_info_checked = False
+        if self._camera_info_topic:
+            self.create_subscription(CameraInfo, self._camera_info_topic, self._on_camera_info,
+                                     camera_qos)
 
         self._local_position: Optional[VehicleLocalPosition] = None
         self._vehicle_status: Optional[VehicleStatus] = None
@@ -399,8 +410,11 @@ class WaypointNavigator(Node):
         self._takeoff_target: Optional[Waypoint] = None
         self._land_command_sent = False
         self._capture_started: Optional[float] = None
+        self._capture_attempt = 0          # failed attempts at the current cell
         self._photo_path: Optional[str] = None
         self._captures_done = 0
+        self._hold_target: Optional[Waypoint] = None
+        self._hold_reason = ''
 
         self._handlers: Dict[NavState, Callable[[], None]] = {
             NavState.IDLE: self._run_idle,
@@ -431,7 +445,10 @@ class WaypointNavigator(Node):
             self.get_logger().info(
                 f'mosaic: session={self._session_id} {self._capture_total} cells, '
                 f'spacing X={self._mosaic_spacing[0]:.2f}m Y={self._mosaic_spacing[1]:.2f}m, '
-                f'frames -> {self._frame_topic}, after_mosaic={self._after_mosaic}')
+                f'frames -> {self._frame_topic}, after_mosaic={self._after_mosaic}, '
+                f'{self._capture_attempts} capture attempt(s) per cell then HOLD')
+            if self._mosaic_plan is not None:
+                self.get_logger().info(f'mosaic plan: {self._mosaic_plan.describe()}')
 
         self._timer = self.create_timer(self._timer_period, self._on_timer)
 
@@ -454,14 +471,25 @@ class WaypointNavigator(Node):
         self.declare_parameter('target_y', 0.0)
         self.declare_parameter('target_altitude', 0.0)
         self.declare_parameter('target_yaw', 0.0)
-        # sensors bridged from Gazebo
+        # sensors (Gazebo bridge in SITL, survey_camera node on the vehicle)
         self.declare_parameter('camera_topic', '/survey/camera/image')
+        self.declare_parameter('camera_info_topic', '')   # '' = no calibration check
         self.declare_parameter('range_topic', '/survey/range/scan')
         self.declare_parameter('range_sensor_down_offset', 0.05)
-        # mosaic (final_action == 'mosaic'): 3x3 grid around the target
+        # mosaic (final_action == 'mosaic'): 3x3 grid around the target.
+        # Grid step, in order of precedence:
+        #   1. mosaic_spacing_x/y > 0            explicit step
+        #   2. mosaic_extent_x/y > 0             step = (extent - footprint) / 2, so the
+        #                                        nine frames cover exactly that area;
+        #                                        target_altitude <= 0 derives the altitude
+        #                                        from mosaic_overlap along X
+        #   3. otherwise                         step = footprint * (1 - mosaic_overlap)
         self.declare_parameter('mosaic_overlap', 0.5)
+        self.declare_parameter('mosaic_min_overlap', 0.3)
         self.declare_parameter('mosaic_spacing_x', 0.0)
         self.declare_parameter('mosaic_spacing_y', 0.0)
+        self.declare_parameter('mosaic_extent_x', 0.0)
+        self.declare_parameter('mosaic_extent_y', 0.0)
         self.declare_parameter('camera_hfov_rad', 1.2)
         self.declare_parameter('image_width', 1280)
         self.declare_parameter('image_height', 960)
@@ -472,6 +500,7 @@ class WaypointNavigator(Node):
         self.declare_parameter('photo_dir', '~/drone_survey_photos')
         self.declare_parameter('capture_settle_time', 2.0)
         self.declare_parameter('capture_timeout', 30.0)
+        self.declare_parameter('capture_attempts', 3)   # per cell, then HOLD
         # laser triangle
         self.declare_parameter('laser_half_angle_deg', 15.0)
         self.declare_parameter('laser_mount_radius', 0.08)
@@ -521,7 +550,15 @@ class WaypointNavigator(Node):
         target_altitude = float(self.get_parameter('target_altitude').value)
         waypoint_file = str(self.get_parameter('waypoint_file').value)
         self._mosaic_spacing: Tuple[float, float] = (0.0, 0.0)
-        if self._final_action in ('survey', 'mosaic') and target_altitude > 0.0:
+        self._mosaic_plan: Optional[MosaicPlan] = None
+        extent = (float(self.get_parameter('mosaic_extent_x').value),
+                  float(self.get_parameter('mosaic_extent_y').value))
+        mosaic_planned = self._final_action == 'mosaic' and (
+            target_altitude > 0.0 or all(v > 0.0 for v in extent))
+        if (self._final_action == 'survey' and target_altitude > 0.0) or mosaic_planned:
+            if self._final_action == 'mosaic':
+                target_altitude, self._mosaic_spacing, self._mosaic_plan = \
+                    self._plan_mosaic_grid(target_altitude, extent)
             target_yaw = float(self.get_parameter('target_yaw').value)
             target = Waypoint(
                 x=float(self.get_parameter('target_x').value),
@@ -536,12 +573,13 @@ class WaypointNavigator(Node):
                 self._waypoints = [target]
                 self._waypoint_source = 'target_x/target_y/target_altitude parameters'
             else:
-                self._mosaic_spacing = self._mosaic_grid_spacing(target_altitude)
                 self._waypoints = mosaic_waypoints(target, self._mosaic_spacing, target.yaw)
-                self._waypoint_source = '3x3 mosaic grid around target_x/target_y/target_altitude'
+                self._waypoint_source = (
+                    f'3x3 mosaic grid around target_x/target_y at {target_altitude:.2f} m')
         elif self._final_action == 'mosaic':
-            raise ValueError('final_action "mosaic" needs "target_altitude" > 0 with '
-                             '"target_x"/"target_y" (the grid is built around that point)')
+            raise ValueError('final_action "mosaic" needs "target_x"/"target_y" (the grid is '
+                             'built around that point) and either "target_altitude" > 0 or '
+                             '"mosaic_extent_x"/"mosaic_extent_y" > 0 (altitude derived)')
         elif waypoint_file:
             self._waypoints = load_waypoints(waypoint_file, yaw_in_degrees)
             self._waypoint_source = waypoint_file
@@ -559,6 +597,7 @@ class WaypointNavigator(Node):
             time.strftime('session_%Y%m%dT%H%M%SZ', time.gmtime())
 
         self._camera_topic = str(self.get_parameter('camera_topic').value)
+        self._camera_info_topic = str(self.get_parameter('camera_info_topic').value).strip()
         self._range_topic = str(self.get_parameter('range_topic').value)
         self._range_down_offset = float(self.get_parameter('range_sensor_down_offset').value)
 
@@ -567,6 +606,9 @@ class WaypointNavigator(Node):
         self._capture_timeout = float(self.get_parameter('capture_timeout').value)
         if self._capture_settle_time < 0.0 or self._capture_timeout <= 0.0:
             raise ValueError('"capture_settle_time" must be >= 0 and "capture_timeout" > 0')
+        self._capture_attempts = int(self.get_parameter('capture_attempts').value)
+        if self._capture_attempts < 1:
+            raise ValueError('"capture_attempts" must be >= 1')
         if self._final_action == 'survey':
             os.makedirs(self._photo_dir, exist_ok=True)
 
@@ -587,22 +629,41 @@ class WaypointNavigator(Node):
         self._body_frame = str(self.get_parameter('body_frame').value)
         self._publish_tf = bool(self.get_parameter('publish_tf').value)
 
-    def _mosaic_grid_spacing(self, altitude: float) -> Tuple[float, float]:
-        """Grid step: explicit `mosaic_spacing_x/y`, else footprint * (1 - overlap)."""
-        override = (float(self.get_parameter('mosaic_spacing_x').value),
-                    float(self.get_parameter('mosaic_spacing_y').value))
-        if all(v > 0.0 for v in override):
-            return override
-        overlap = float(self.get_parameter('mosaic_overlap').value)
-        if not 0.0 <= overlap < 1.0:
-            raise ValueError('"mosaic_overlap" must be in [0, 1)')
+    def _plan_mosaic_grid(self, altitude: float, extent: Tuple[float, float]
+                          ) -> Tuple[float, Tuple[float, float], Optional[MosaicPlan]]:
+        """
+        Flight altitude and grid step for the 3x3 mosaic (see the parameter notes).
+
+        Returns ``(altitude, (spacing_x, spacing_y), plan)``; ``plan`` is None
+        for the explicit-spacing and legacy overlap modes.
+        """
         hfov = float(self.get_parameter('camera_hfov_rad').value)
         width = int(self.get_parameter('image_width').value)
         height = int(self.get_parameter('image_height').value)
         if not 0.0 < hfov < math.pi or width <= 0 or height <= 0:
             raise ValueError('"camera_hfov_rad" must be in (0, pi) and image size positive')
+        overlap = float(self.get_parameter('mosaic_overlap').value)
+        min_overlap = float(self.get_parameter('mosaic_min_overlap').value)
+        if not 0.0 <= overlap < 1.0 or not 0.0 <= min_overlap < 1.0:
+            raise ValueError('"mosaic_overlap" and "mosaic_min_overlap" must be in [0, 1)')
+
+        override = (float(self.get_parameter('mosaic_spacing_x').value),
+                    float(self.get_parameter('mosaic_spacing_y').value))
+        if all(v > 0.0 for v in override):
+            if altitude <= 0.0:
+                raise ValueError('"mosaic_spacing_x/y" need an explicit "target_altitude" > 0')
+            return altitude, override, None
+
+        if all(v > 0.0 for v in extent):
+            # ValueError from plan_mosaic names the altitude range that works.
+            plan = plan_mosaic(hfov, width, height, extent,
+                               altitude if altitude > 0.0 else None, overlap, min_overlap)
+            return plan.altitude, plan.spacing, plan
+
+        if altitude <= 0.0:
+            raise ValueError('"target_altitude" must be > 0 unless "mosaic_extent_x/y" are set')
         along_u, along_v = camera_footprint(altitude, hfov, width, height)
-        return along_u * (1.0 - overlap), along_v * (1.0 - overlap)
+        return altitude, (along_u * (1.0 - overlap), along_v * (1.0 - overlap)), None
 
     def _topic(self, relative_name: str) -> str:
         """Prefix a relative PX4 topic with the configured namespace."""
@@ -638,11 +699,31 @@ class WaypointNavigator(Node):
                 f'Camera online: first image on {self._camera_topic} '
                 f'({msg.width}x{msg.height} {msg.encoding})')
 
+    def _on_camera_info(self, msg: CameraInfo) -> None:
+        """Warn once if the calibration's field of view differs from camera_hfov_rad."""
+        if self._camera_info_checked or msg.k[0] <= 0.0 or msg.width <= 0:
+            return
+        self._camera_info_checked = True
+        configured = float(self.get_parameter('camera_hfov_rad').value)
+        measured = 2.0 * math.atan(msg.width / (2.0 * msg.k[0]))
+        if abs(measured - configured) / configured > 0.02:
+            self.get_logger().warn(
+                f'camera calibration on {self._camera_info_topic} says hfov='
+                f'{measured:.4f} rad ({math.degrees(measured):.1f} deg, fx={msg.k[0]:.1f}) but '
+                f'the grid was planned with camera_hfov_rad={configured:.4f} '
+                f'({math.degrees(configured):.1f} deg). Relaunch with '
+                f'camera_hfov_rad:={measured:.4f} so the step and overlap are right.')
+        else:
+            self.get_logger().info(
+                f'camera calibration agrees with camera_hfov_rad '
+                f'({math.degrees(measured):.1f} deg)')
+
     def _camera_status(self) -> str:
         """One-line camera diagnostic for the capture logs."""
         if self._images_received == 0:
-            return (f'no image has ever arrived on {self._camera_topic} - the ros_gz bridge is '
-                    f'not running, or it cannot discover Gazebo (GZ_IP / GZ_PARTITION mismatch)')
+            return (f'no image has ever arrived on {self._camera_topic} - the camera node / '
+                    f'ros_gz bridge is not running, or (SITL) it cannot discover Gazebo '
+                    f'(GZ_IP / GZ_PARTITION mismatch)')
         age = self._now_seconds() - (self._latest_image_time or 0.0)
         rate = ''
         if len(self._image_times) >= 2:
@@ -651,8 +732,8 @@ class WaypointNavigator(Node):
                 rate = f', ~{(len(self._image_times) - 1) / span:.1f} Hz'
         hint = ''
         if age > 5.0:
-            hint = (' - frames are being lost between the bridge and this node; large images '
-                    'need a bigger UDP receive buffer (net.core.rmem_max), see README')
+            hint = (' - frames are being lost between the camera publisher and this node; large '
+                    'images need a bigger UDP receive buffer (net.core.rmem_max), see README')
         return f'{self._images_received} images received, last one {age:.1f}s ago{rate}{hint}'
 
     def _on_range_scan(self, msg: LaserScan) -> None:
@@ -805,15 +886,22 @@ class WaypointNavigator(Node):
         return None
 
     def _save_photo(self, image: Image, pose: Waypoint, target: Waypoint) -> str:
-        """Write the image as PNG plus a JSON sidecar; return the PNG path."""
+        """
+        Save the image as PNG plus a JSON sidecar; return the PNG path.
+
+        Decoding the message is done here (so an unsupported encoding fails
+        the attempt), the PNG encode itself runs in a background thread: a
+        1920x1200 frame takes a few hundred ms to compress on the Pi 5 and
+        the offboard setpoint stream must not pause that long.
+        """
         pil = image_to_pil(image)
         stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+        os.makedirs(self._photo_dir, exist_ok=True)
         base = os.path.join(
             self._photo_dir,
             f'{self._session_id}_{stamp}_seq{self._captures_done + 1:02d}_id{target.grid_id}'
             f'_N{pose.x:+.2f}_E{pose.y:+.2f}_alt{pose.altitude:.2f}')
         png_path = base + '.png'
-        pil.save(png_path)
 
         agl = self._current_agl()
         metadata = {
@@ -845,8 +933,17 @@ class WaypointNavigator(Node):
             'target': target.describe(),
             'state': self._state.value,
         }
-        with open(base + '.json', 'w') as handle:
-            json.dump(metadata, handle, indent=2)
+
+        def write() -> None:
+            try:
+                pil.save(png_path, compress_level=1)
+                with open(base + '.json', 'w') as handle:
+                    json.dump(metadata, handle, indent=2)
+            except (OSError, ValueError) as error:
+                self.get_logger().error(f'Failed to write {png_path}: {error} '
+                                        f'(the frame was still sent to the ground station)')
+
+        threading.Thread(target=write, name='photo-writer', daemon=True).start()
         return png_path
 
     def _publish_frame(self, image: Image, pose: Waypoint, target: Waypoint) -> None:
@@ -1061,6 +1158,7 @@ class WaypointNavigator(Node):
 
         if target.capture:
             self._capture_started = self._now_seconds()
+            self._capture_attempt = 0
             self._transition(NavState.CAPTURE, f'photo requested at {target.name}')
             return
 
@@ -1090,17 +1188,24 @@ class WaypointNavigator(Node):
             if self._after_mosaic == 'land':
                 self._transition(NavState.LANDING, reason)
             else:
-                self._transition(NavState.HOLD, reason)
+                self._hold_at(self._waypoints[-1], reason)
         else:
-            self._transition(NavState.HOLD, 'last waypoint reached, final_action=hover')
+            self._hold_at(self._waypoints[-1], 'last waypoint reached, final_action=hover')
+
+    def _hold_at(self, target: Waypoint, reason: str) -> None:
+        """Enter the terminal HOLD state hovering at `target`."""
+        self._hold_target = target
+        self._hold_reason = reason
+        self._transition(NavState.HOLD, reason)
 
     def _run_hold(self) -> None:
-        """Hover at the last waypoint indefinitely."""
-        target = self._waypoints[-1]
+        """Hover at the hold target (last waypoint, or the cell whose photo failed)."""
+        target = self._hold_target or self._waypoints[-1]
         self._publish_trajectory_setpoint(target)
         self._check_still_offboard()
         self.get_logger().info(
-            f'Holding hover at {target.describe()}', throttle_duration_sec=10.0)
+            f'Holding hover at {target.describe()} ({self._hold_reason})',
+            throttle_duration_sec=10.0)
 
     def _run_capture(self) -> None:
         """Hover at the current waypoint, settle, save one frame and send it onwards."""
@@ -1124,8 +1229,7 @@ class WaypointNavigator(Node):
             try:
                 self._photo_path = self._save_photo(self._latest_image, pose, target)
             except (OSError, ValueError) as error:
-                self.get_logger().error(f'Failed to save photo at {target.name}: {error}')
-                self._advance_or_finish()
+                self._capture_failed(target, f'cannot use the frame: {error}')
                 return
             self._captures_done += 1
             self.get_logger().info(
@@ -1135,15 +1239,37 @@ class WaypointNavigator(Node):
             return
 
         if elapsed >= self._capture_timeout:
-            self.get_logger().warn(
-                f'No image taken at {target.name} within {self._capture_timeout:.0f}s '
-                f'({self._camera_status()}); continuing without a photo')
-            self._advance_or_finish()
+            self._capture_failed(
+                target, f'no frame within {self._capture_timeout:.0f}s ({self._camera_status()})')
             return
 
         self.get_logger().warn(
             f'Waiting for a camera frame taken after settling: {self._camera_status()}',
             throttle_duration_sec=5.0)
+
+    def _capture_failed(self, target: Waypoint, reason: str) -> None:
+        """
+        One capture attempt at `target` failed: retry, or stop the mission.
+
+        The stitcher refuses anything but the full set of frames, so flying
+        on without the photo would waste the whole mission.  After
+        `capture_attempts` failures the vehicle holds position at the cell
+        (HOLD is terminal): the pilot takes over by RC or the mission is
+        relaunched once the camera works again.
+        """
+        self._capture_attempt += 1
+        if self._capture_attempt < self._capture_attempts:
+            self.get_logger().warn(
+                f'Capture attempt {self._capture_attempt}/{self._capture_attempts} at '
+                f'{target.name} failed: {reason}. Settling again and retrying')
+            self._capture_started = self._now_seconds()
+            return
+        self.get_logger().error(
+            f'No photo at {target.name} after {self._capture_attempts} attempt(s): {reason}. '
+            f'The stitcher needs all {self._capture_total} frames, so the mission stops here '
+            f'with {self._captures_done} captured. Holding position - take over by RC '
+            f'(Position / Land) or fix the camera and relaunch.')
+        self._hold_at(target, f'capture failed at {target.name}')
 
     def _run_laser_hold(self) -> None:
         """Hover at the target and draw the laser triangle on the ground."""

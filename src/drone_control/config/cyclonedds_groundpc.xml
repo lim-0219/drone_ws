@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!--
   CycloneDDS on the GROUND PC (laptop) for the real vehicle.
-  Mirror of cyclonedds_jetson.xml: unicast discovery to the Jetson's fixed
-  address, pinned to the Wi-Fi interface. Same ROS_DOMAIN_ID (7) on both ends.
+  Mirror of cyclonedds_onboard.xml: unicast discovery to the Raspberry Pi's
+  fixed address, pinned to the Wi-Fi interface. Same ROS_DOMAIN_ID (7) on both ends.
 
-  Edit: NetworkInterface name (ip a) and the Jetson address.
+  Edit: NetworkInterface name (ip a) and the Pi's address.
   Use:  export CYCLONEDDS_URI=file://$HOME/drone_ws/install/drone_control/share/drone_control/config/cyclonedds_groundpc.xml
 -->
 <CycloneDDS xmlns="https://cdds.io/config">
@@ -18,7 +18,7 @@
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
       <Peers>
-        <Peer address="192.168.4.20"/>   <!-- Jetson -->
+        <Peer address="192.168.4.20"/>   <!-- Raspberry Pi 5 -->
         <Peer address="127.0.0.1"/>      <!-- nodes on this PC -->
       </Peers>
     </Discovery>
