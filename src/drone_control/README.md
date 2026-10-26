@@ -155,7 +155,7 @@ remain, otherwise to the final action.
 
 | State | What it does | Exit condition |
 |-------|--------------|----------------|
-| `IDLE` | Streams `offboard_control_mode` + a hold-station setpoint, then requests OFFBOARD and ARM (in that order), retrying ~1 Hz | `nav_state == OFFBOARD` **and** `arming_state == ARMED` |
+| `IDLE` | Streams `offboard_control_mode` + a hold-station setpoint; once `arm_approved` is true requests OFFBOARD and ARM (in that order), retrying ~1 Hz. While it is false the node only streams and logs `ARM gate closed` every 10 s | `nav_state == OFFBOARD` **and** `arming_state == ARMED` |
 | `TAKEOFF` | Climbs **vertically**: keeps the current x/y, targets the first waypoint's altitude and yaw | target held within `position_tolerance` for `reach_hold_time` |
 | `NAVIGATE` | Commands the current waypoint; advances on arrival | last waypoint reached |
 | `HOLD` | Hovers at the last waypoint, or at the cell whose photo failed | terminal (take over by RC, or relaunch) |
@@ -181,6 +181,7 @@ reached when the 3D distance stays within `position_tolerance` continuously for
 | `reach_hold_time` | double | `1.0` | Dwell inside the tolerance before "reached" |
 | `final_action` | string | `hover` | `hover`, `land`, `survey` or `mosaic` |
 | `setpoint_warmup_count` | int | `20` | Setpoints streamed before OFFBOARD + ARM |
+| `arm_approved` | bool | `false` | **ARM gate.** The node never sends OFFBOARD/ARM while false. SITL launches pass `true`; `drone_onboard.launch.py` leaves it false and the operator grants it at the field with `ros2 param set /waypoint_navigator arm_approved true` (runtime-settable; setting it back to false stops further commands but never disarms) |
 | `yaw_in_degrees` | bool | `true` | Units of YAML `yaw` and `target_yaw` |
 | **Survey target** | | | *used when `final_action=survey` and `target_altitude > 0`; otherwise the survey happens at the last YAML waypoint* |
 | `target_x`, `target_y` | double | `0.0` | Target North / East, metres (NED) |
@@ -796,6 +797,24 @@ position) instead of flying on. Nothing in this run needed the stitcher web
 app. Not verifiable in SITL: the camera publisher QoS (the bridge, not
 `survey_camera`, publishes here) - check `ros2 topic info -v` on the Pi.
 
+**Live, in SITL, navigator on ROS 2 Jazzy, ground station on Humble
+(2026-10-27).** The real vehicle pairs a Jazzy Raspberry Pi with the Humble
+ground PC, so the same split was rehearsed on this machine: `px4_msgs`,
+`drone_control_msgs` and `drone_control` were built in a RoboStack Jazzy
+environment (rmw_cyclonedds) and the navigator ran there, while PX4 SITL,
+the uXRCE agent, the Gazebo bridge and the ground station ran in Humble.
+Everything crossed the distro boundary in both directions: the Jazzy node
+received PX4 status/position from the Humble agent, 1280x960 frames and the
+range scan from the Humble bridge; the ARM gate was opened from Humble
+through the `set_parameters` service (`ARM APPROVED by operator` ->
+OFFBOARD + ARM); the Humble ground station received all nine `CapturedFrame`
+messages (3.7 MB each) from the Jazzy navigator and stitched them
+(3113 x 1732 px, 14.9 s); PX4 flew the Jazzy setpoints, landed and disarmed.
+Before approval the node streamed setpoints for six minutes without sending
+a single command. One caveat: the Humble `ros2 param set` CLI hung on this
+machine (a stuck `ros2 daemon`); the service call itself is fine, and a
+2-line rclpy client (or `ros2 daemon stop` first) works around the CLI.
+
 **Live, in SITL (textured world), original 5 m grid.** A full mission flew the nine cells, every
 frame reached the ground station, and the real Gazebo photos stitched into a
 1402x1080 px map (14.0 x 10.8 m at 100 px/m, 94 % valid) in 18.9 s: 20/20
@@ -1050,7 +1069,12 @@ the plumbing ready.
 
 ## Safety notes
 
-- The node arms and flies as soon as PX4 accepts OFFBOARD. SITL first.
+- With `arm_approved:=true` (the SITL launch default) the node arms and flies
+  as soon as PX4 accepts OFFBOARD. On the real vehicle the launch leaves it
+  false: the node streams setpoints and waits until the operator runs
+  `ros2 param set /waypoint_navigator arm_approved true` standing next to the
+  vehicle with the RC in hand. The approval is a runtime parameter, not a
+  launch argument, so a systemd-started node cannot arm on boot.
 - If PX4 leaves offboard (failsafe, RC override) the node warns and keeps
   streaming setpoints so offboard can be re-engaged; it does **not** re-arm.
 - Waypoints and the survey target are absolute local-NED positions relative to

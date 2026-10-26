@@ -51,7 +51,7 @@
 | `MicroXRCEAgent udp4 -p 8888` | `MicroXRCEAgent serial --dev /dev/ttyAMA0 -b 921600` | Pi 5 | 없음 |
 | Gazebo 카메라 → ros_gz 브리지 → `/survey/camera/image` | Arducam B0353(CSI, libcamera) → `survey_camera` 노드(Picamera2) → 같은 토픽 | Pi 5 | 새 노드 (제공) |
 | Gazebo gpu_lidar → 브리지 → 노드가 `/fmu/in/distance_sensor` 발행 | **TF-Luna → Pixhawk TELEM3 (PX4 `tfmini` 드라이버)** — PX4가 직접 융합 | Pixhawk | 없음 (노드의 범위 전달 경로는 그냥 비활성) |
-| `waypoint_navigator` (노트북) | `waypoint_navigator` (`drone_onboard.launch.py`) | Pi 5 | 없음 (격자는 20×10 m 기준으로 자동 계산) |
+| `waypoint_navigator` (노트북, launch가 `arm_approved:=true`) | `waypoint_navigator` (`drone_onboard.launch.py`, **ARM 게이트**: `ros2 param set … arm_approved true` 전까지 시동 안 걺) | Pi 5 | 없음 (격자는 20×10 m 기준으로 자동 계산) |
 | RViz 레이저 마커 | `laser_control` 노드 → MOSFET → 레이저 ×3, 서보 ×3 (Pixhawk AUX). **launch에서 `laser:=true`를 줘야 뜸(기본 꺼짐)** | Pi 5 + Pixhawk | 새 노드 (제공) |
 | `ground_station` + 스티칭 웹앱 (같은 노트북) | 같은 것, **지상 PC** — `CapturedFrame`이 Wi-Fi(ROS 2/DDS)로 넘어옴 | 지상 PC | 없음 (DDS 설정만) |
 | QGC (UDP, 같은 PC) | QGC ↔ SiK 라디오 (TELEM1) | 지상 PC | 없음 |
@@ -161,6 +161,7 @@ ros2 run drone_control mosaic_plan --fx 1187.4     # 캘리브레이션 fx로 �
 | Wi-Fi/지상국 끊김 | 아무 것도 안 해도 됨 (임무는 Pi에서 계속). 사진은 Pi 로컬(`~/drone_survey_photos`)에도 저장 |
 | Pi 멈춤/UART 끊김 | PX4가 1 s 후 Hold → RC로 Land |
 | 셀에서 촬영 3회 실패 → 내비게이터가 그 셀에서 HOLD | 로그 `No photo at gridN after 3 attempt(s)`. RC로 Position/Land, 카메라 점검 후 재시동 |
+| launch는 떴는데 시동이 안 걸림 | 정상: ARM 게이트. 기체 옆에서 확인 후 `ros2 param set /waypoint_navigator arm_approved true` (7장 10번) |
 | RC 끊김 | PX4가 RTL (`NAV_RCL_ACT=2`) — **이륙 전 Home 위치와 RTL 고도 확인** |
 | 배터리 경고 | QGC 경고 시 즉시 Land/RTL. `BAT1_V_EMPTY` 이하로 비행하지 않기 |
 
@@ -359,6 +360,8 @@ Actuators 탭 → AUX(FMU) 1~3 ← **"Peripheral via Actuator Set 1 / 2 / 3"** (
 
 A로 진행합니다. 코드는 Humble/Jazzy 양쪽 rclpy API만 사용합니다. 지상 PC와 Pi 모두 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`(Jazzy 기본은 Fast DDS이므로 반드시 지정).
 
+**검증(2026-10-27, 노트북 SITL):** 같은 분리를 노트북에서 재현했습니다 — 내비게이터는 RoboStack Jazzy 환경(x86, rmw_cyclonedds)에서, PX4 SITL·에이전트·Gazebo 브리지·지상국은 Humble에서. PX4 토픽(Humble 에이전트 → Jazzy), 카메라/레인지(Humble 브리지 → Jazzy), ARM 승인 서비스(Humble → Jazzy `set_parameters`), `CapturedFrame` 9장(Jazzy → Humble 지상국, 각 3.7 MB)과 스티칭까지 전부 통과했습니다. 따라서 **메시지 정의가 같고 양쪽이 CycloneDDS이면 Humble↔Jazzy는 동작**합니다. 남은 미확인은 Pi(arm64, Debian 소스 빌드)라는 플랫폼 자체뿐이며, 7장 4번 벤치 테스트로 확인합니다. 참고: Humble 쪽 `ros2 param set` CLI가 `ros2 daemon`이 멈춰 먹통이 될 수 있으니, 그러면 `ros2 daemon stop` 후 재시도하거나 README "Verified"의 rclpy 2줄 클라이언트를 쓰세요.
+
 ### 5.2 OS 설치
 
 1. Raspberry Pi Imager → **Raspberry Pi OS Lite (64-bit, Bookworm)**. 고급 설정에서 호스트명, 사용자, SSH 키, Wi-Fi(우리 라우터 SSID) 미리 설정. 64 GB 이상 A2 microSD(또는 NVMe HAT).
@@ -491,7 +494,7 @@ ros2 run drone_control laser_control --ros-args -p backend:=rpi -p hardware_enab
 
 ### 5.9 자동 시작 (나중에)
 
-처음엔 SSH 터미널 두 개(에이전트, launch)로 수동 실행하세요. 안정되면 systemd 서비스(`MicroXRCEAgent`, `drone_onboard.launch.py`)로 부팅 시 자동 실행 — 단 `laser`/`laser_hardware_enable`은 서비스 파일에서도 기본 false로 두고 비행 당일 명시적으로 켜세요.
+처음엔 SSH 터미널 두 개(에이전트, launch)로 수동 실행하세요. 안정되면 systemd 서비스(`MicroXRCEAgent`, `drone_onboard.launch.py`)로 부팅 시 자동 실행 — 단 `laser`/`laser_hardware_enable`은 서비스 파일에서도 기본 false로 두고 비행 당일 명시적으로 켜세요. ARM 게이트(`arm_approved`)는 launch 인자가 아니라 **런타임 파라미터**라 서비스로 자동 시작해도 기체가 스스로 시동을 걸지 않습니다. 비행 직전 기체 옆에서 `ros2 param set /waypoint_navigator arm_approved true`.
 
 ---
 
@@ -548,7 +551,7 @@ ros2 run drone_control ground_station --ros-args -p camera_info_topic:=/survey/c
 | 7 | 서보 | Pi: `ros2 run drone_control laser_control --ros-args -p servo_enable:=true` (mock) + 다른 터미널 `ros2 topic pub -1 /laser/command drone_control_msgs/msg/LaserCommand "{enable: false, pattern: line}"` → `triangle` | 서보가 두 위치로 이동. 안 움직이면 4.7절의 함수 할당·서보 레일 전원 확인. (`servo_enable` 기본값은 false) |
 | 8 | 레이저(LED로) | 킬스위치 OFF 상태로 LED 연결 → `laser_control --ros-args -p backend:=rpi -p hardware_enable:=true -p interlock_bypass:=true` + `/laser/command {enable: true}` | LED 3개 ON, `enable:false`로 OFF. 그 다음에만 실제 레이저, 벽을 향해, 킬스위치 손에 |
 | 9 | 인터락 | 위 상태에서 `interlock_bypass`를 빼고 실행 | 레이저가 **켜지지 않아야** 정상(`vehicle not armed`) |
-| 10 | 오프보드 암 | Pi: `ros2 launch drone_control drone_onboard.launch.py mission:=hover target_altitude:=1.0 camera:=false` | 로그 `PX4 mode -> OFFBOARD`, `arming_state -> ARMED`, 모터가 프롭 없이 저속 회전 → `STATE IDLE -> TAKEOFF` → Ctrl+C → QGC로 Disarm. 암이 거부되면 QGC 메시지(“Preflight Fail: …”)가 이유 |
+| 10 | 오프보드 암 (ARM 게이트) | Pi: `ros2 launch drone_control drone_onboard.launch.py mission:=hover target_altitude:=1.0 camera:=false` → 로그에 `ARM gate closed … waiting for ros2 param set` 이 10초마다 뜨고 **아무 일도 안 일어나야** 정상. 그 다음 다른 터미널(Pi 또는 지상 PC)에서 `ros2 param set /waypoint_navigator arm_approved true` | 승인 전: 모터 정지, QGC 모드 변화 없음. 승인 후: 로그 `ARM APPROVED`, `PX4 mode -> OFFBOARD`, `arming_state -> ARMED`, 모터가 프롭 없이 저속 회전 → `STATE IDLE -> TAKEOFF` → Ctrl+C → QGC로 Disarm. 암이 거부되면 QGC 메시지(“Preflight Fail: …”)가 이유 |
 | 10b | 촬영 재시도·HOLD (SITL) | 노트북 SITL에서 `ros2 launch drone_control mosaic_mission.launch.py bridge:=false capture_timeout:=10` (카메라 프레임이 전혀 없는 상황) | 로그 `Capture attempt 1/3 … failed`, `2/3 … failed` → `STATE CAPTURE -> HOLD (capture failed at grid5)`, 그 자리에서 호버 유지(날아가지 않음) |
 | 11 | 페일세이프 | 10번 상태에서 Pi의 launch를 Ctrl+C | 1초 후 PX4가 Hold로 전환(QGC 모드 표시) |
 
@@ -564,7 +567,7 @@ ros2 run drone_control ground_station --ros-args -p camera_info_topic:=/survey/c
 |---|---|---|---|---|
 | F1 | **수동 Stabilized 이륙·호버·착륙** (경험자) | 1~2 m | 떨림 없음, 모터 온도 정상, 10초 호버 유지 | 프롭 방향/밸런스, PID(기본값으로 X500은 보통 OK), 진동(Flight Review) |
 | F2 | **Position 모드 호버** 30초, 전후좌우 1 m 이동 | 2 m | 위치 유지 ±0.5 m, 고도 ±0.3 m | 컴퍼스 간섭(회전 시 흔들림=toilet-bowl), GPS 품질 |
-| F3 | **오프보드 호버** `mission:=hover target_altitude:=1.5 target_x:=0 target_y:=0` → 중간에 RC로 Position 전환 | 1.5 m | 자동 이륙·호버, RC 전환 즉시 응답 | `COM_OBL_RC_ACT`, 오프보드 스트림(10 Hz) 확인 |
+| F3 | **오프보드 호버** `mission:=hover target_altitude:=1.5 target_x:=0 target_y:=0` → 사람·프롭 확인 후 `ros2 param set /waypoint_navigator arm_approved true` → 중간에 RC로 Position 전환 | 1.5 m | 자동 이륙·호버, RC 전환 즉시 응답 | `COM_OBL_RC_ACT`, 오프보드 스트림(10 Hz) 확인 |
 | F4 | **survey** 1장 촬영 `mission:=survey target_altitude:=3` (레이저는 별도 회차: `laser:=true laser_hardware_enable:=true laser_backend:=rpi`, 짧게, 사람 없는 방향) | 3 m | 사진 저장, `dist_bottom` 유효; 레이저 회차엔 `LASERS ON` 로그 후 착륙 시 OFF | AGL 경고(`range AGL … disagrees`)면 TF-Luna 마운트/빔 아래 부품 |
 | F5 | **mosaic** 9장 = 20 × 10 m, `after_mosaic:=land` (기본 고도 6.25 m, 셀 간격 5.0 × 1.875 m; 지상 25 × 15 m 확보, 중간 발표 런은 `laser` 기본 false) | 6.25 m | 로그 `mosaic plan: altitude 6.25 m … overlap 50 % / 70 %`, 9장 전송, 대시보드 n/9 → 지도 20 × 10 m(3000 × 1500 px), 지면 질감이 이어짐 | 스티치 실패면 `diagnostics.json`: `insufficient_features`(지면 질감 부족·흔들림 → `camera_exposure_us`), `implausible footprint`(AGL). 셀에서 HOLD면 카메라(`ros2 topic hz`) |
 

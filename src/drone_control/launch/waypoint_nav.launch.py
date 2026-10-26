@@ -38,6 +38,9 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             'waypoint_file', default_value=default_waypoints,
             description='Absolute path to the waypoint YAML file.'),
+        DeclareLaunchArgument('arm_approved', default_value='true',
+                              description='ARM gate; true in SITL. false = wait for '
+                                          'ros2 param set /waypoint_navigator arm_approved true'),
         DeclareLaunchArgument(
             'px4_namespace', default_value='',
             description='Topic prefix for the vehicle, e.g. "/px4_1". '
@@ -79,6 +82,7 @@ def generate_launch_description() -> LaunchDescription:
             'position_tolerance': _typed('position_tolerance', float),
             'reach_hold_time': _typed('reach_hold_time', float),
             'final_action': _typed('final_action', str),
+            'arm_approved': _typed('arm_approved', bool),
             'setpoint_warmup_count': _typed('setpoint_warmup_count', int),
             'yaw_in_degrees': _typed('yaw_in_degrees', bool),
         }],

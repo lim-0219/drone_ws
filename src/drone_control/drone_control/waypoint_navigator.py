@@ -17,6 +17,11 @@ parameters) in PX4 offboard mode and then, depending on ``final_action``:
   is taken.  The ground station builds the ``drone_stitch`` manifest and runs
   the stitcher once all nine frames are in.
 
+  The node never arms on its own: after the setpoint stream is warmed up it
+  waits in IDLE until the ``arm_approved`` parameter is set to true (by the
+  launch file in simulation, by ``ros2 param set`` from the operator on the
+  real vehicle) and only then requests OFFBOARD and ARM.
+
   The grid is sized from the wanted mosaic (``mosaic_extent_x/y``, default
   20 x 10 m) and the camera footprint at the flight altitude
   (:mod:`drone_control.mosaic_plan`); the stitcher needs *exactly* nine
@@ -94,8 +99,10 @@ from px4_msgs.msg import (
     VehicleLocalPosition,
     VehicleStatus,
 )
+from rcl_interfaces.msg import SetParametersResult
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import (
     DurabilityPolicy,
     HistoryPolicy,
@@ -163,8 +170,11 @@ class NavState(Enum):
 
     Transitions (all of them, in one place):
 
-    IDLE       -> TAKEOFF   : offboard stream warmed up AND nav_state == OFFBOARD
-                              AND arming_state == ARMED
+    IDLE       -> IDLE      : offboard stream warmed up but `arm_approved` is
+                              false: keep streaming, send no command
+    IDLE       -> TAKEOFF   : offboard stream warmed up AND `arm_approved`
+                              AND nav_state == OFFBOARD AND arming_state == ARMED
+                              (the node sends OFFBOARD + ARM once approved)
     TAKEOFF    -> NAVIGATE  : vertical climb target held within tolerance for
                               `reach_hold_time` seconds
     NAVIGATE   -> NAVIGATE  : current waypoint held within tolerance for
@@ -450,11 +460,38 @@ class WaypointNavigator(Node):
             if self._mosaic_plan is not None:
                 self.get_logger().info(f'mosaic plan: {self._mosaic_plan.describe()}')
 
+        self.add_on_set_parameters_callback(self._on_parameters_set)
+        if self._arm_approved:
+            self.get_logger().warn(
+                'arm_approved is TRUE at start-up: the vehicle will be armed as soon as PX4 '
+                'accepts OFFBOARD (fine in SITL; on the real vehicle launch with it false and '
+                'approve at the field)')
+        else:
+            self.get_logger().info(
+                f'ARM gate closed: approve with  ros2 param set '
+                f'{self.get_fully_qualified_name()} arm_approved true')
         self._timer = self.create_timer(self._timer_period, self._on_timer)
 
     # ------------------------------------------------------------------
     # parameters
     # ------------------------------------------------------------------
+    def _on_parameters_set(self, params: List[Parameter]) -> SetParametersResult:
+        """Accept runtime changes of `arm_approved` (everything else is read at start-up)."""
+        for param in params:
+            if param.name != 'arm_approved':
+                continue
+            if param.type_ != Parameter.Type.BOOL:
+                return SetParametersResult(successful=False,
+                                           reason='arm_approved must be a bool')
+            self._arm_approved = bool(param.value)
+            if self._arm_approved:
+                self.get_logger().warn('ARM APPROVED by operator: requesting OFFBOARD + ARM '
+                                       'on the next tick')
+            else:
+                self.get_logger().info('ARM approval withdrawn: no further OFFBOARD/ARM '
+                                       'commands will be sent (an armed vehicle stays armed)')
+        return SetParametersResult(successful=True)
+
     def _declare_parameters(self) -> None:
         # navigation
         self.declare_parameter('waypoint_file', '')
@@ -464,6 +501,9 @@ class WaypointNavigator(Node):
         self.declare_parameter('reach_hold_time', 1.0)
         self.declare_parameter('final_action', 'hover')
         self.declare_parameter('setpoint_warmup_count', 20)
+        # ARM gate: false = stream setpoints and wait; the operator grants it
+        # at runtime with `ros2 param set <node> arm_approved true`.
+        self.declare_parameter('arm_approved', False)
         self.declare_parameter('yaw_in_degrees', True)
         # survey target (used when final_action == 'survey' and target_altitude > 0;
         # otherwise the survey happens at the last YAML waypoint)
@@ -541,6 +581,7 @@ class WaypointNavigator(Node):
         self._warmup_required = int(self.get_parameter('setpoint_warmup_count').value)
         if self._warmup_required < 1:
             raise ValueError('parameter "setpoint_warmup_count" must be >= 1')
+        self._arm_approved = bool(self.get_parameter('arm_approved').value)
 
         yaw_in_degrees = bool(self.get_parameter('yaw_in_degrees').value)
 
@@ -1105,6 +1146,13 @@ class WaypointNavigator(Node):
                 x=start.x, y=start.y, z=first.z, yaw=first.yaw, name='takeoff')
             self._transition(NavState.TAKEOFF, 'offboard engaged and armed')
             self.get_logger().info(f'Climbing to {self._takeoff_target.describe()}')
+            return
+
+        if not self._arm_approved:
+            self.get_logger().info(
+                f'Setpoint stream ready ({self._warmup_ticks} sent), ARM gate closed - waiting '
+                f'for  ros2 param set {self.get_fully_qualified_name()} arm_approved true',
+                throttle_duration_sec=10.0)
             return
 
         # First attempt fires as soon as the warmup stream is done; after that

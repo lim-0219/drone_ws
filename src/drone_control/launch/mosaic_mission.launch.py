@@ -83,6 +83,9 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('session_id', default_value='',
                               description='Session name (empty = session_<UTC time>).'),
         # navigation
+        DeclareLaunchArgument('arm_approved', default_value='true',
+                              description='ARM gate; true in SITL. false = wait for '
+                                          'ros2 param set /waypoint_navigator arm_approved true'),
         DeclareLaunchArgument('px4_namespace', default_value=''),
         DeclareLaunchArgument('position_tolerance', default_value='0.3'),
         DeclareLaunchArgument('reach_hold_time', default_value='1.0'),
@@ -142,6 +145,7 @@ def generate_launch_description() -> LaunchDescription:
         emulate_tty=True,
         parameters=[{
             'final_action': 'mosaic',
+            'arm_approved': _typed('arm_approved', bool),
             'target_x': _typed('target_x', float),
             'target_y': _typed('target_y', float),
             'target_altitude': _typed('target_altitude', float),

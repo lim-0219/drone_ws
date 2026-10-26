@@ -22,6 +22,11 @@ the navigator warns at start-up if the published CameraInfo disagrees.
 
 Lasers: ``laser:=true laser_hardware_enable:=true laser_backend:=rpi`` and,
 for the servo mechanism, ``laser_servo_enable:=true``.
+
+ARM gate: the navigator streams setpoints but does not arm until
+``ros2 param set /waypoint_navigator arm_approved true`` (from the Pi or the
+ground PC).  ``arm_approved:=true`` on the launch line skips the gate - SITL
+only.
 """
 
 import math
@@ -61,6 +66,10 @@ def generate_launch_description() -> LaunchDescription:
     arguments = [
         DeclareLaunchArgument('mission', default_value='mosaic',
                               description='final_action: mosaic, survey, hover or land.'),
+        DeclareLaunchArgument('arm_approved', default_value='false',
+                              description='ARM gate. Keep false: the node streams setpoints '
+                                          'and waits until you run  ros2 param set '
+                                          '/waypoint_navigator arm_approved true  at the field.'),
         DeclareLaunchArgument('target_x', default_value='5.0',
                               description='Cell-5 North coordinate, metres (NED x).'),
         DeclareLaunchArgument('target_y', default_value='0.0',
@@ -131,6 +140,7 @@ def generate_launch_description() -> LaunchDescription:
         output='screen', emulate_tty=True,
         parameters=[{
             'final_action': _typed('mission', str),
+            'arm_approved': _typed('arm_approved', bool),
             'target_x': _typed('target_x', float),
             'target_y': _typed('target_y', float),
             'target_altitude': _typed('target_altitude', float),

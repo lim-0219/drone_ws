@@ -48,6 +48,9 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('target_yaw', default_value='0.0',
                               description='Heading at the target (degrees, NED, 0 = North).'),
         # navigation
+        DeclareLaunchArgument('arm_approved', default_value='true',
+                              description='ARM gate; true in SITL. false = wait for '
+                                          'ros2 param set /waypoint_navigator arm_approved true'),
         DeclareLaunchArgument('px4_namespace', default_value='',
                               description='PX4 topic prefix, e.g. "/px4_1". Empty = default.'),
         DeclareLaunchArgument('timer_period', default_value='0.1',
@@ -103,6 +106,7 @@ def generate_launch_description() -> LaunchDescription:
         emulate_tty=True,
         parameters=[{
             'final_action': 'survey',
+            'arm_approved': _typed('arm_approved', bool),
             'target_x': _typed('target_x', float),
             'target_y': _typed('target_y', float),
             'target_altitude': _typed('target_altitude', float),
