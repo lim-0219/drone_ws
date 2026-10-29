@@ -18,7 +18,7 @@
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
       <Peers>
-        <Peer address="192.168.200.172"/>   <!-- Raspberry Pi 5 -->
+        <Peer address="172.20.10.3"/>   <!-- Raspberry Pi 5 (iPhone hotspot) -->
         <Peer address="127.0.0.1"/>      <!-- nodes on this PC -->
       </Peers>
     </Discovery>

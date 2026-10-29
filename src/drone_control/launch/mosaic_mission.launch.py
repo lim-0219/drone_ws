@@ -56,6 +56,14 @@ def generate_launch_description() -> LaunchDescription:
                               description='Cell-5 North coordinate in metres (NED x).'),
         DeclareLaunchArgument('target_y', default_value='0.0',
                               description='Cell-5 East coordinate in metres (NED y).'),
+        DeclareLaunchArgument('target_lat', default_value='0.0',
+                              description='Cell-5 latitude, degrees. With target_lon (both '
+                                          'non-zero) replaces target_x/target_y.'),
+        DeclareLaunchArgument('target_lon', default_value='0.0',
+                              description='Cell-5 longitude, degrees.'),
+        DeclareLaunchArgument('max_target_distance', default_value='100.0',
+                              description='No ARM while any waypoint is farther than this from '
+                                          'the vehicle, metres (0 = off).'),
         DeclareLaunchArgument('target_altitude', default_value='7.5',
                               description='Flight altitude above the takeoff point, metres '
                                           '(0 = derive from mosaic_extent_x and mosaic_overlap).'),
@@ -148,6 +156,9 @@ def generate_launch_description() -> LaunchDescription:
             'arm_approved': _typed('arm_approved', bool),
             'target_x': _typed('target_x', float),
             'target_y': _typed('target_y', float),
+            'target_lat': _typed('target_lat', float),
+            'target_lon': _typed('target_lon', float),
+            'max_target_distance': _typed('max_target_distance', float),
             'target_altitude': _typed('target_altitude', float),
             'target_yaw': _typed('target_yaw', float),
             'yaw_in_degrees': True,

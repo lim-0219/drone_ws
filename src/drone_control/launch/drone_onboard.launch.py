@@ -17,6 +17,13 @@ see ``ros2 run drone_control mosaic_plan``)::
         target_x:=5.0 target_y:=0.0 \\
         camera_info_url:=~/camera_calibration/b0353.yaml camera_hfov_rad:=1.3495
 
+Or give the target as GPS coordinates (e.g. picked on a map); the node
+places the grid once PX4 has a GPS fix and refuses to arm while any cell is
+more than ``max_target_distance`` (100 m) from the vehicle::
+
+    ros2 launch drone_control drone_onboard.launch.py \\
+        target_lat:=37.5665123 target_lon:=126.9780456
+
 After a checkerboard calibration set ``camera_hfov_rad := 2*atan(W/(2*fx))``;
 the navigator warns at start-up if the published CameraInfo disagrees.
 
@@ -74,6 +81,14 @@ def generate_launch_description() -> LaunchDescription:
                               description='Cell-5 North coordinate, metres (NED x).'),
         DeclareLaunchArgument('target_y', default_value='0.0',
                               description='Cell-5 East coordinate, metres (NED y).'),
+        DeclareLaunchArgument('target_lat', default_value='0.0',
+                              description='Cell-5 latitude, degrees. With target_lon (both '
+                                          'non-zero) replaces target_x/target_y.'),
+        DeclareLaunchArgument('target_lon', default_value='0.0',
+                              description='Cell-5 longitude, degrees.'),
+        DeclareLaunchArgument('max_target_distance', default_value='100.0',
+                              description='No ARM while any waypoint is farther than this from '
+                                          'the vehicle, metres (0 = off).'),
         DeclareLaunchArgument('target_altitude', default_value=f'{DEFAULT_ALTITUDE:.2f}',
                               description='Flight altitude above the takeoff point, metres. '
                                           '0 = derive from mosaic_extent_x and mosaic_overlap.'),
@@ -143,6 +158,9 @@ def generate_launch_description() -> LaunchDescription:
             'arm_approved': _typed('arm_approved', bool),
             'target_x': _typed('target_x', float),
             'target_y': _typed('target_y', float),
+            'target_lat': _typed('target_lat', float),
+            'target_lon': _typed('target_lon', float),
+            'max_target_distance': _typed('max_target_distance', float),
             'target_altitude': _typed('target_altitude', float),
             'target_yaw': _typed('target_yaw', float),
             'yaw_in_degrees': True,

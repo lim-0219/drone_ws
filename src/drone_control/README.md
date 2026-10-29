@@ -187,6 +187,8 @@ reached when the 3D distance stays within `position_tolerance` continuously for
 | `target_x`, `target_y` | double | `0.0` | Target North / East, metres (NED) |
 | `target_altitude` | double | `0.0` | Target altitude above the origin, metres, **positive-up** |
 | `target_yaw` | double | `0.0` | Heading at the target (mosaic: held for the whole grid; grid +Y points this way) |
+| `target_lat`, `target_lon` | double | `0.0` | Target as GPS coordinates, degrees. Both non-zero = used instead of `target_x/y`; the node places it once PX4 reports its global origin (see *Target as GPS coordinates*) |
+| `max_target_distance` | double | `100.0` | No ARM while any waypoint is farther than this (m, horizontal) from the vehicle; 0 = off |
 | **Mosaic** | | | *`final_action=mosaic`; the target is grid cell 5* |
 | `mosaic_extent_x`, `mosaic_extent_y` | double | `0.0` | Wanted stitched size (m) along image right / top. Set (both launches use 20 x 10): step = `(extent - footprint) / 2`; `target_altitude <= 0` then derives the altitude from `mosaic_overlap` along X. 0 = legacy step below |
 | `mosaic_min_overlap` | double | `0.3` | Refuse to start if either axis would overlap less than this (the error names the altitude range that works) |
@@ -777,7 +779,63 @@ attempt and the mission continues normally. To run the ground station on another
 same `ROS_DOMAIN_ID`/RMW, `ros2 run drone_control ground_station` there, and
 `ground_station:=false` in the launch here.
 
+### Target as GPS coordinates
+
+On the field it is easier to pick the target on a map than to measure
+North/East metres from the takeoff spot. Give cell 5 as latitude/longitude
+instead of `target_x/target_y`:
+
+```bash
+ros2 launch drone_control drone_onboard.launch.py \
+    target_lat:=37.5665123 target_lon:=126.9780456 target_yaw:=0.0
+```
+
+(Google Maps: right-click the spot, click the coordinates to copy them; QGC
+shows them under the cursor on the Plan map.) The navigator waits in IDLE
+until PX4 has a GPS fix and reports its global origin
+(`vehicle_local_position.xy_global`, `ref_lat`/`ref_lon`), projects the
+target with the same azimuthal equidistant projection PX4 uses
+(`latlon_to_ned`, a transcription of `MapProjection::project`) and logs
+where it landed:
+
+```
+Target lat=37.5665123 lon=126.9780456 placed at N=6.00 E=-4.00 m from the EKF origin (...)
+```
+
+Check that line before approving the ARM gate. Whatever way the target is
+given, the node will not request OFFBOARD/ARM while any of the nine cells is
+more than `max_target_distance` (100 m) from the vehicle - a typo in the
+coordinates is refused at the gate instead of flown. The altitude stays
+relative to the EKF origin, i.e. the ground where PX4 was powered up, so
+power the vehicle up on the takeoff spot.
+
+**Do not run SITL on the laptop on the real vehicle's domain.** The laptop
+`.bashrc` exports `ROS_DOMAIN_ID=7`, the same domain as the Pi and the real
+Pixhawk (`UXRCE_DDS_DOM_ID=7`). With the laptop and the Pi on the same Wi-Fi,
+a SITL navigator then also receives the real Pixhawk's topics and its
+OFFBOARD/ARM commands reach the real Pixhawk. PX4 SITL takes its domain from
+`ROS_DOMAIN_ID`, so give SITL and its ROS shells another one:
+
+```bash
+ROS_DOMAIN_ID=42 make px4_sitl gz_x500_survey      # PX4 terminal
+export ROS_DOMAIN_ID=42                            # every SITL ROS terminal
+```
+
 ### Verified
+
+**Live, in SITL, GPS target (2026-10-29).** Domain 42, textured world.
+`target_lat/target_lon` 6 m North and 4 m West of the EKF origin: the node
+logged `placed at N=6.00 E=-4.00`, flew there, and with `bridge:=false` held at
+cell 5 at lat 47.39802496 / lon 8.54611079 (`vehicle_global_position`)
+against the commanded 47.39802498 / 8.54611083 - under 1 cm. A second SITL
+start put the EKF origin 0.04 m elsewhere; the same coordinates were placed at
+N=5.96 E=-3.96 and the full mission (bridge and ground station on) captured
+9/9 frames, landed, and the CLI stitcher produced a 3134 x 1670 px map in
+10.3 s whose world labels run E-14..E+5 / N+1..N+10, i.e. centred on the
+target. A target 1.1 km away was refused: `grid9 is 1113.1 m from the
+vehicle, more than max_target_distance=100 m ... not arming`, and the vehicle
+stayed disarmed.
+
 
 **Live, in SITL (textured world), 20 x 10 m grid (2026-10-26).** With the
 default `mosaic_mission.launch.py` arguments (7.5 m, extent 20 x 10 m ->

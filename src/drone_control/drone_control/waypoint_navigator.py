@@ -40,7 +40,18 @@ once, in :func:`_parse_waypoint` / :meth:`WaypointNavigator._read_parameters`::
     z_ned = -altitude
 
 The local origin is the EKF origin, which in SITL is where the vehicle sat
-when the estimator initialised - i.e. the takeoff pad.
+when the estimator initialised - i.e. the takeoff pad.  On the real vehicle
+it is where PX4 first had a GPS fix, normally where the vehicle was powered
+up.
+
+The survey/mosaic target can instead be given as latitude/longitude
+(``target_lat`` / ``target_lon``).  The node then waits in IDLE until PX4
+reports its global origin (``vehicle_local_position.xy_global`` with
+``ref_lat``/``ref_lon``), projects the target into the local frame with the
+same azimuthal equidistant projection PX4 uses (:func:`latlon_to_ned`) and
+only then lets the ARM gate open.  Either way the node refuses to arm while
+any waypoint is more than ``max_target_distance`` metres from the vehicle,
+so a typo in the coordinates cannot send it away.
 
 Yaw in the YAML file is in degrees by default (``yaw_in_degrees`` parameter),
 following the NED convention: 0 = North, +90 = East, 180 = South, -90 = West.
@@ -240,6 +251,30 @@ def _wrap_pi(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
+# Same Earth radius as PX4's lib/geo (CONSTANTS_RADIUS_OF_EARTH).
+_EARTH_RADIUS_M = 6371000.0
+
+
+def latlon_to_ned(lat: float, lon: float, ref_lat: float, ref_lon: float) -> Tuple[float, float]:
+    """
+    Project a latitude/longitude (degrees) into PX4's local frame: (north, east) metres.
+
+    A transcription of PX4's ``MapProjection::project`` (azimuthal equidistant
+    projection around the EKF origin ``ref_lat``/``ref_lon``), so a target
+    placed here lands exactly where PX4's own position estimate puts it.
+    """
+    lat_r, lon_r = math.radians(lat), math.radians(lon)
+    ref_lat_r, ref_lon_r = math.radians(ref_lat), math.radians(ref_lon)
+    sin_lat, cos_lat = math.sin(lat_r), math.cos(lat_r)
+    sin_ref, cos_ref = math.sin(ref_lat_r), math.cos(ref_lat_r)
+    cos_d_lon = math.cos(lon_r - ref_lon_r)
+    c = math.acos(max(-1.0, min(1.0, sin_ref * sin_lat + cos_ref * cos_lat * cos_d_lon)))
+    k = c / math.sin(c) if c > 0.0 else 1.0
+    north = k * (cos_ref * sin_lat - sin_ref * cos_lat * cos_d_lon) * _EARTH_RADIUS_M
+    east = k * cos_lat * math.sin(lon_r - ref_lon_r) * _EARTH_RADIUS_M
+    return north, east
+
+
 def _parse_waypoint(index: int, entry: dict, yaw_in_degrees: bool) -> Waypoint:
     """
     Turn one YAML entry into a NED :class:`Waypoint`.
@@ -437,10 +472,20 @@ class WaypointNavigator(Node):
             NavState.LANDED: self._run_landed,
         }
 
-        self.get_logger().info(
-            f'Loaded {len(self._waypoints)} waypoint(s) from {self._waypoint_source}')
-        for waypoint in self._waypoints:
-            self.get_logger().info(f'  - {waypoint.describe()}')
+        if self._target_latlon is not None:
+            self.get_logger().info(
+                f'Target lat={self._target_latlon[0]:.7f} lon={self._target_latlon[1]:.7f}: '
+                f'{len(self._waypoints)} waypoint(s) will be placed once PX4 reports its '
+                f'global origin (GPS fix)')
+        else:
+            self.get_logger().info(
+                f'Loaded {len(self._waypoints)} waypoint(s) from {self._waypoint_source}')
+            for waypoint in self._waypoints:
+                self.get_logger().info(f'  - {waypoint.describe()}')
+        if self._max_target_distance > 0.0:
+            self.get_logger().info(
+                f'Safety: no ARM while any waypoint is more than '
+                f'{self._max_target_distance:.0f} m from the vehicle (max_target_distance)')
         self.get_logger().info(
             f'namespace="{self._namespace or "<none>"}" rate={1.0 / self._timer_period:.1f}Hz '
             f'tolerance={self._tolerance}m hold={self._reach_hold_time}s '
@@ -511,6 +556,13 @@ class WaypointNavigator(Node):
         self.declare_parameter('target_y', 0.0)
         self.declare_parameter('target_altitude', 0.0)
         self.declare_parameter('target_yaw', 0.0)
+        # Alternative to target_x/target_y: the target as GPS coordinates
+        # (degrees).  Both non-zero = used, and target_x/target_y are ignored.
+        self.declare_parameter('target_lat', 0.0)
+        self.declare_parameter('target_lon', 0.0)
+        # Refuse to arm while any waypoint is farther than this from the
+        # vehicle (metres, horizontal).  0 disables the check.
+        self.declare_parameter('max_target_distance', 100.0)
         # sensors (Gazebo bridge in SITL, survey_camera node on the vehicle)
         self.declare_parameter('camera_topic', '/survey/camera/image')
         self.declare_parameter('camera_info_topic', '')   # '' = no calibration check
@@ -585,6 +637,22 @@ class WaypointNavigator(Node):
 
         yaw_in_degrees = bool(self.get_parameter('yaw_in_degrees').value)
 
+        target_lat = float(self.get_parameter('target_lat').value)
+        target_lon = float(self.get_parameter('target_lon').value)
+        self._target_latlon: Optional[Tuple[float, float]] = None
+        if target_lat != 0.0 or target_lon != 0.0:
+            if target_lat == 0.0 or target_lon == 0.0:
+                raise ValueError('set both "target_lat" and "target_lon" (degrees), or neither')
+            if not (-90.0 <= target_lat <= 90.0 and -180.0 <= target_lon <= 180.0):
+                raise ValueError('"target_lat" must be in [-90, 90] and "target_lon" in '
+                                 '[-180, 180] degrees')
+            self._target_latlon = (target_lat, target_lon)
+        self._target_ref: Optional[Tuple[float, float]] = None   # origin the target was placed in
+        self._target_template: Optional[Waypoint] = None
+        self._max_target_distance = float(self.get_parameter('max_target_distance').value)
+        if self._max_target_distance < 0.0:
+            raise ValueError('"max_target_distance" must be >= 0 (0 disables the check)')
+
         # Where the vehicle goes: a single parameter-given target for the survey
         # mission, otherwise the YAML list.  target_altitude is positive-up and
         # negated here, exactly like the YAML altitude in _parse_waypoint().
@@ -610,13 +678,22 @@ class WaypointNavigator(Node):
                 capture=True,
                 grid_id=5,
             )
+            if self._target_latlon is not None:
+                # Placeholder at the origin until _target_ready() projects the
+                # lat/lon into the local frame; the count (capture_total) is right.
+                target = replace(target, x=0.0, y=0.0)
+                self._target_template = target
+            self._waypoints = self._mission_from_target(target)
+            where = 'target_lat/target_lon' if self._target_latlon else 'target_x/target_y'
             if self._final_action == 'survey':
-                self._waypoints = [target]
-                self._waypoint_source = 'target_x/target_y/target_altitude parameters'
+                self._waypoint_source = f'{where}/target_altitude parameters'
             else:
-                self._waypoints = mosaic_waypoints(target, self._mosaic_spacing, target.yaw)
                 self._waypoint_source = (
-                    f'3x3 mosaic grid around target_x/target_y at {target_altitude:.2f} m')
+                    f'3x3 mosaic grid around {where} at {target_altitude:.2f} m')
+        elif self._target_latlon is not None:
+            raise ValueError('"target_lat"/"target_lon" need final_action "survey" or "mosaic" '
+                             'together with "target_altitude" > 0 (or, for mosaic, '
+                             '"mosaic_extent_x/y" > 0)')
         elif self._final_action == 'mosaic':
             raise ValueError('final_action "mosaic" needs "target_x"/"target_y" (the grid is '
                              'built around that point) and either "target_altitude" > 0 or '
@@ -669,6 +746,12 @@ class WaypointNavigator(Node):
         self._marker_frame = str(self.get_parameter('marker_frame').value)
         self._body_frame = str(self.get_parameter('body_frame').value)
         self._publish_tf = bool(self.get_parameter('publish_tf').value)
+
+    def _mission_from_target(self, target: Waypoint) -> List[Waypoint]:
+        """Return the survey target alone, or the nine mosaic cells around it."""
+        if self._final_action == 'survey':
+            return [target]
+        return mosaic_waypoints(target, self._mosaic_spacing, target.yaw)
 
     def _plan_mosaic_grid(self, altitude: float, extent: Tuple[float, float]
                           ) -> Tuple[float, Tuple[float, float], Optional[MosaicPlan]]:
@@ -1110,6 +1193,53 @@ class WaypointNavigator(Node):
             return None
         return math.dist((current.x, current.y, current.z), (target.x, target.y, target.z))
 
+    def _target_ready(self) -> bool:
+        """
+        Place a lat/lon target in the local frame and check every waypoint is near.
+
+        Called every IDLE tick, so the grid follows the EKF origin if PX4 moves
+        it before takeoff; once the vehicle has left IDLE the grid is fixed.
+        """
+        position = self._local_position
+        if self._target_latlon is not None:
+            if position is None or not position.xy_global:
+                self.get_logger().info(
+                    'Waiting for PX4 global origin (GPS fix, vehicle_local_position.xy_global) '
+                    'to place target_lat/target_lon - no ARM until then',
+                    throttle_duration_sec=10.0)
+                return False
+            ref = (float(position.ref_lat), float(position.ref_lon))
+            if ref != self._target_ref:
+                assert self._target_template is not None
+                north, east = latlon_to_ned(*self._target_latlon, *ref)
+                self._waypoints = self._mission_from_target(
+                    replace(self._target_template, x=north, y=east))
+                self._target_ref = ref
+                self.get_logger().info(
+                    f'Target lat={self._target_latlon[0]:.7f} lon={self._target_latlon[1]:.7f} '
+                    f'placed at N={north:.2f} E={east:.2f} m from the EKF origin '
+                    f'(lat={ref[0]:.7f} lon={ref[1]:.7f}):')
+                for waypoint in self._waypoints:
+                    self.get_logger().info(f'  - {waypoint.describe()}')
+
+        if self._max_target_distance > 0.0:
+            current = self._current_position()
+            if current is None:
+                self.get_logger().info(
+                    'Waiting for a valid local position to check max_target_distance - '
+                    'no ARM until then', throttle_duration_sec=10.0)
+                return False
+            farthest = max(self._waypoints,
+                           key=lambda wp: math.hypot(wp.x - current.x, wp.y - current.y))
+            distance = math.hypot(farthest.x - current.x, farthest.y - current.y)
+            if distance > self._max_target_distance:
+                self.get_logger().error(
+                    f'{farthest.name} is {distance:.1f} m from the vehicle, more than '
+                    f'max_target_distance={self._max_target_distance:.0f} m - check the target '
+                    f'coordinates; not arming', throttle_duration_sec=10.0)
+                return False
+        return True
+
     def _target_reached(self, target: Waypoint) -> bool:
         """Report whether `target` has been held within tolerance long enough."""
         distance = self._distance_to(target)
@@ -1135,6 +1265,11 @@ class WaypointNavigator(Node):
 
         self._warmup_ticks += 1
         if self._warmup_ticks < self._warmup_required:
+            return
+
+        # Nothing below (takeoff included) may run on a target that is not
+        # placed yet or is implausibly far away.
+        if not self._target_ready():
             return
 
         if self._is_offboard() and self._is_armed():
