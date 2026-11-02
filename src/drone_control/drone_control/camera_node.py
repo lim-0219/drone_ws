@@ -33,6 +33,15 @@ puts the real K / distortion into the stitcher manifest.  Without it the
 navigator and ground station use the pinhole model from ``camera_hfov_rad``
 (B0353: 1.3495 rad from the 3.6 mm lens and 3 um pixels).
 
+Flight video (``video_dir`` / ``video_udp``, picamera2 only): the camera can
+be opened by one process at a time, so ``rpicam-vid`` cannot run next to this
+node.  Instead the node adds a small ``lores`` stream (``video_width`` x
+``video_height`` @ ``video_fps``) to the same camera, encodes it in software
+(H.264, libav) and writes it as MPEG-TS to ``video_dir/flight_<UTC>.ts``
+and/or sends it to ``video_udp`` (e.g. ``udp://172.20.10.2:5000``, the ground
+PC).  MPEG-TS stays playable if the node is killed.  Any video error is
+logged and the survey frames keep flowing.
+
 Mount check (same as in simulation): with the vehicle facing North the image
 top must be North and image right East.  Fix a rotated mount with
 ``rotate_deg`` (0/90/180/270, applied in software); a residual yaw offset
@@ -41,6 +50,7 @@ goes into the ground station's ``image_top_yaw_offset_rad``.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from typing import Optional
 
@@ -79,16 +89,23 @@ class Picamera2Backend:
     """libcamera through Picamera2; returns H x W x 3 uint8 arrays in R,G,B order."""
 
     def __init__(self, logger, camera_num: int, width: int, height: int, fps: int,
-                 exposure_us: int, analogue_gain: float) -> None:
+                 exposure_us: int, analogue_gain: float, video: Optional[dict] = None) -> None:
         from picamera2 import Picamera2  # Raspberry Pi OS: python3-picamera2
+        self._logger = logger
+        self._encoder = None
         self._camera = Picamera2(camera_num)
+        video = video or {}
+        want_video = bool(video.get('file') or video.get('udp'))
+        sensor_fps = max(fps, int(video.get('fps', 0))) if want_video else fps
         # Picamera2 names formats by libcamera's memory layout: 'BGR888' is
         # the stream whose bytes come out R, G, B (what rgb8 wants); 'RGB888'
         # would give B, G, R (OpenCV order).  Check once with a red object.
         config = self._camera.create_video_configuration(
             main={'size': (width, height), 'format': 'BGR888'},
+            lores=({'size': (int(video['width']), int(video['height'])), 'format': 'YUV420'}
+                   if want_video else None),
             buffer_count=3,
-            controls={'FrameRate': float(fps)},
+            controls={'FrameRate': float(sensor_fps)},
         )
         self._camera.configure(config)
         controls = {'AwbEnable': True}
@@ -101,13 +118,47 @@ class Picamera2Backend:
         self._camera.start()
         actual = self._camera.camera_configuration()['main']
         logger.info(f'picamera2: camera {camera_num} -> {actual["size"]} {actual["format"]} '
-                    f'@ {fps} fps, exposure '
+                    f'@ {sensor_fps} fps (published at {fps} Hz), exposure '
                     + (f'{exposure_us} us gain {analogue_gain}' if exposure_us > 0 else 'auto'))
+        if want_video:
+            self._start_video(video)
+
+    def _start_video(self, video: dict) -> None:
+        """Encode the lores stream to a file and/or UDP; never fatal for the survey frames."""
+        try:
+            from picamera2.encoders import LibavH264Encoder
+            from picamera2.outputs import PyavOutput
+            outputs = []
+            if video.get('file'):
+                outputs.append(PyavOutput(video['file'], format='mpegts'))
+            if video.get('udp'):
+                udp = PyavOutput(video['udp'], format='mpegts')
+                udp.error_callback = lambda error: self._logger.warn(
+                    f'video UDP stream stopped: {error} (the file keeps recording)')
+                outputs.append(udp)
+            fps = int(video['fps'])
+            encoder = LibavH264Encoder(bitrate=int(video['bitrate']), framerate=fps, iperiod=fps)
+            self._camera.start_encoder(encoder, outputs, name='lores')
+            self._encoder = encoder
+            self._logger.info(
+                f'video: {video["width"]}x{video["height"]} @ {fps} fps H.264 '
+                f'{int(video["bitrate"]) / 1e6:.1f} Mb/s -> '
+                + ', '.join(x for x in (video.get('file'), video.get('udp')) if x))
+        except Exception as error:  # noqa: BLE001 - the survey photos matter more
+            self._encoder = None
+            self._logger.error(f'video recording NOT started: {error!r} '
+                               f'(survey frames continue; check python3-av)')
 
     def read(self):
         return self._camera.capture_array('main')
 
     def close(self) -> None:
+        if self._encoder is not None:
+            try:
+                self._camera.stop_encoder(self._encoder)
+            except Exception as error:  # noqa: BLE001
+                self._logger.warn(f'video stop failed: {error!r}')
+            self._encoder = None
         self._camera.stop()
         self._camera.close()
 
@@ -156,6 +207,13 @@ class SurveyCameraNode(Node):
         self.declare_parameter('image_topic', '/survey/camera/image')
         self.declare_parameter('camera_info_topic', '/survey/camera/camera_info')
         self.declare_parameter('camera_info_url', '')
+        # Flight video from a lores stream (picamera2 only).  Both empty = off.
+        self.declare_parameter('video_dir', '')        # writes video_dir/flight_<UTC>.ts
+        self.declare_parameter('video_udp', '')        # e.g. udp://172.20.10.2:5000
+        self.declare_parameter('video_width', 960)
+        self.declare_parameter('video_height', 600)
+        self.declare_parameter('video_fps', 15)
+        self.declare_parameter('video_bitrate', 2000000)
 
         import numpy  # noqa: F401 - checked here so the error names the missing package
         self._np = numpy
@@ -170,13 +228,30 @@ class SurveyCameraNode(Node):
             raise ValueError('"rotate_deg" must be 0, 90, 180 or 270')
         self._swap_rb = bool(self.get_parameter('swap_rb').value)
 
+        video = {
+            'file': '',
+            'udp': str(self.get_parameter('video_udp').value).strip(),
+            'width': int(self.get_parameter('video_width').value),
+            'height': int(self.get_parameter('video_height').value),
+            'fps': int(self.get_parameter('video_fps').value),
+            'bitrate': int(self.get_parameter('video_bitrate').value),
+        }
+        video_dir = str(self.get_parameter('video_dir').value).strip()
+        if video_dir:
+            video_dir = os.path.expanduser(video_dir)
+            os.makedirs(video_dir, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+            video['file'] = os.path.join(video_dir, f'flight_{stamp}.ts')
+
         backend = str(self.get_parameter('backend').value).strip().lower()
         if backend == 'picamera2':
             self._backend = Picamera2Backend(
                 self.get_logger(), int(self.get_parameter('camera_num').value), width, height,
                 fps, int(self.get_parameter('exposure_us').value),
-                float(self.get_parameter('analogue_gain').value))
+                float(self.get_parameter('analogue_gain').value), video)
         elif backend == 'v4l2':
+            if video['file'] or video['udp']:
+                self.get_logger().warn('video_dir/video_udp need the picamera2 backend; ignored')
             self._backend = V4l2Backend(self.get_logger(),
                                         str(self.get_parameter('device').value),
                                         width, height, fps)

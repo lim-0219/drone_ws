@@ -183,7 +183,7 @@ reached when the 3D distance stays within `position_tolerance` continuously for
 | `setpoint_warmup_count` | int | `20` | Setpoints streamed before OFFBOARD + ARM |
 | `arm_approved` | bool | `false` | **ARM gate.** The node never sends OFFBOARD/ARM while false. SITL launches pass `true`; `drone_onboard.launch.py` leaves it false and the operator grants it at the field with `ros2 param set /waypoint_navigator arm_approved true` (runtime-settable; setting it back to false stops further commands but never disarms) |
 | `yaw_in_degrees` | bool | `true` | Units of YAML `yaw` and `target_yaw` |
-| **Survey target** | | | *used when `final_action=survey` and `target_altitude > 0`; otherwise the survey happens at the last YAML waypoint* |
+| **Single target** | | | *used when `final_action` is `survey`, `hover` or `land` and `target_altitude > 0` (fly there, then photograph / hover / land); otherwise the YAML waypoints are flown* |
 | `target_x`, `target_y` | double | `0.0` | Target North / East, metres (NED) |
 | `target_altitude` | double | `0.0` | Target altitude above the origin, metres, **positive-up** |
 | `target_yaw` | double | `0.0` | Heading at the target (mosaic: held for the whole grid; grid +Y points this way) |

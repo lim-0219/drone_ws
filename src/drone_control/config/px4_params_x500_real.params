@@ -1,4 +1,4 @@
-# drone_control: PX4 parameters for the REAL vehicle (Pixhawk 6C, X500 V2, Jetson on TELEM2)
+# drone_control: PX4 parameters for the REAL vehicle (Pixhawk 6C, X500 V2, Raspberry Pi 5 on TELEM2)
 # Load in QGroundControl: Vehicle Setup -> Parameters -> Tools -> Load from file, then reboot.
 # Format: vehicle_id <TAB> component_id <TAB> name <TAB> value <TAB> type (6 = int32, 9 = float)
 #
@@ -10,9 +10,13 @@
 1	1	UXRCE_DDS_SYNCT	1	6
 # Keep MAVLink off TELEM2 (TELEM1 stays the SiK radio / QGC link via MAV_0_CONFIG).
 1	1	MAV_1_CONFIG	0	6
-# TF-Luna on TELEM3 (enum 103) through the Benewake TFmini serial driver (UART mode).
-# Remove this line if the TF-Luna is wired to the Jetson instead.
-1	1	SENS_TFMINI_CFG	103	6
+# Port plan: TELEM1 = telemetry radio (MAVLink, default), TELEM2 = Pi, TELEM3 = ELRS receiver,
+# GPS1 = GPS, GPS2 = TFmini rangefinder.
+# ELRS receiver (CRSF) on TELEM3 (enum 103). Needs firmware built with CONFIG_DRIVERS_RC_CRSF_RC=y
+# (not in the stock px4_fmu-v6c_default); with stock firmware this line is reported as missing.
+1	1	RC_CRSF_PRT_CFG	103	6
+# Benewake TFmini (UART mode) on GPS2 (enum 202): GPS2 pin 2 TX -> TFmini RX, pin 3 RX <- TFmini TX.
+1	1	SENS_TFMINI_CFG	202	6
 # Range finder: always fuse so vehicle_local_position.dist_bottom is valid at the mission altitude.
 # Height reference stays GPS (1) on the real vehicle; set EKF2_RNG_POS_X/Y/Z to the mount offset.
 1	1	EKF2_RNG_CTRL	2	6

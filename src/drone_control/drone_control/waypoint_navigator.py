@@ -664,7 +664,8 @@ class WaypointNavigator(Node):
                   float(self.get_parameter('mosaic_extent_y').value))
         mosaic_planned = self._final_action == 'mosaic' and (
             target_altitude > 0.0 or all(v > 0.0 for v in extent))
-        if (self._final_action == 'survey' and target_altitude > 0.0) or mosaic_planned:
+        single_target = self._final_action in ('survey', 'hover', 'land') and target_altitude > 0.0
+        if single_target or mosaic_planned:
             if self._final_action == 'mosaic':
                 target_altitude, self._mosaic_spacing, self._mosaic_plan = \
                     self._plan_mosaic_grid(target_altitude, extent)
@@ -674,8 +675,10 @@ class WaypointNavigator(Node):
                 y=float(self.get_parameter('target_y').value),
                 z=-target_altitude,  # positive-up altitude -> NED down
                 yaw=_wrap_pi(math.radians(target_yaw) if yaw_in_degrees else target_yaw),
-                name='survey_target',
-                capture=True,
+                name='target' if single_target and self._final_action != 'survey'
+                else 'survey_target',
+                # hover/land just fly there; survey and mosaic photograph
+                capture=self._final_action in ('survey', 'mosaic'),
                 grid_id=5,
             )
             if self._target_latlon is not None:
@@ -685,15 +688,14 @@ class WaypointNavigator(Node):
                 self._target_template = target
             self._waypoints = self._mission_from_target(target)
             where = 'target_lat/target_lon' if self._target_latlon else 'target_x/target_y'
-            if self._final_action == 'survey':
+            if self._final_action != 'mosaic':
                 self._waypoint_source = f'{where}/target_altitude parameters'
             else:
                 self._waypoint_source = (
                     f'3x3 mosaic grid around {where} at {target_altitude:.2f} m')
         elif self._target_latlon is not None:
-            raise ValueError('"target_lat"/"target_lon" need final_action "survey" or "mosaic" '
-                             'together with "target_altitude" > 0 (or, for mosaic, '
-                             '"mosaic_extent_x/y" > 0)')
+            raise ValueError('"target_lat"/"target_lon" need "target_altitude" > 0 (or, for '
+                             'mosaic, "mosaic_extent_x/y" > 0)')
         elif self._final_action == 'mosaic':
             raise ValueError('final_action "mosaic" needs "target_x"/"target_y" (the grid is '
                              'built around that point) and either "target_altitude" > 0 or '
@@ -706,8 +708,8 @@ class WaypointNavigator(Node):
                 self._waypoints[-1] = replace(self._waypoints[-1], capture=True, grid_id=5)
         else:
             raise ValueError(
-                'set parameter "waypoint_file" (path to the waypoint YAML), or for the survey '
-                'mission set "target_altitude" > 0 together with "target_x"/"target_y"')
+                'set parameter "waypoint_file" (path to the waypoint YAML), or set '
+                '"target_altitude" > 0 together with "target_x"/"target_y" (single target)')
         self._capture_total = sum(1 for wp in self._waypoints if wp.capture)
 
         self._frame_topic = str(self.get_parameter('frame_topic').value)
@@ -748,8 +750,8 @@ class WaypointNavigator(Node):
         self._publish_tf = bool(self.get_parameter('publish_tf').value)
 
     def _mission_from_target(self, target: Waypoint) -> List[Waypoint]:
-        """Return the survey target alone, or the nine mosaic cells around it."""
-        if self._final_action == 'survey':
+        """Return the single target (survey/hover/land), or the nine mosaic cells around it."""
+        if self._final_action != 'mosaic':
             return [target]
         return mosaic_waypoints(target, self._mosaic_spacing, target.yaw)
 

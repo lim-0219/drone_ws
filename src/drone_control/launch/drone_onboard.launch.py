@@ -138,6 +138,12 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('camera_analogue_gain', default_value='1.0'),
         DeclareLaunchArgument('camera_info_url', default_value='',
                               description='camera_calibration YAML; publishes CameraInfo.'),
+        DeclareLaunchArgument('video_dir', default_value='',
+                              description='Record the flight video to <dir>/flight_<UTC>.ts '
+                                          '(lores H.264). Empty = off.'),
+        DeclareLaunchArgument('video_udp', default_value='',
+                              description='Also stream it, e.g. udp://172.20.10.2:5000 (ground '
+                                          'PC). Empty = off.'),
         # laser / servo payload (off by default)
         DeclareLaunchArgument('laser', default_value='false',
                               description='Start laser_control at all. Default false so a '
@@ -203,6 +209,8 @@ def generate_launch_description() -> LaunchDescription:
             'image_topic': CAMERA_TOPIC,
             'camera_info_topic': CAMERA_INFO_TOPIC,
             'camera_info_url': _typed('camera_info_url', str),
+            'video_dir': _typed('video_dir', str),
+            'video_udp': _typed('video_udp', str),
         }],
     )
 

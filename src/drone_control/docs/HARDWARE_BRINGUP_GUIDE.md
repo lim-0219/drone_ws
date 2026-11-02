@@ -212,8 +212,9 @@ Pi 5 전원 메모: 공식 어댑터는 5.1 V/5 A(USB-PD)이지만 우리 부하
 | GPS1 | M10 GPS/컴퍼스 (세이프티 스위치·부저 포함) | 자동 | |
 | TELEM1 | SiK 공중 유닛 | `MAV_0_CONFIG` 기본 TELEM1, 57600 | |
 | **TELEM2** | Pi 5 UART (아래 3.4) | `UXRCE_DDS_CFG=102`, `SER_TEL2_BAUD=921600` | **VCC(5 V) 핀은 연결하지 않음** |
-| **TELEM3** | TF-Luna (UART 모드) | `SENS_TFMINI_CFG=103` | 대안: GPS2 (enum 202) |
-| RC IN | 수신기 SBUS **[확인 필요]** | QGC RC 캘리브레이션 | |
+| **TELEM3** | ELRS 수신기 (CRSF, 6핀 케이블) | `RC_CRSF_PRT_CFG=103` | 순정 6C 펌웨어에는 CRSF 드라이버가 없음: `boards/px4/fmu-v6c/default.px4board`에 `CONFIG_DRIVERS_RC_CRSF_RC=y` 추가 후 빌드(플래시 98.8 %) |
+| **GPS2** | TFmini 거리센서 (UART, 4핀) | `SENS_TFMINI_CFG=202` | GPS2 핀 1 5 V, 2 TX → TFmini RX, 3 RX ← TFmini TX, 6 GND. 4·5번(I2C)은 사용 안 함 |
+| PPM/SBUS, DSM | (SBUS/DSM 수신기를 쓸 때만) | QGC RC 캘리브레이션 | ELRS는 여기가 아니라 TELEM3 |
 | USB-C | 설정·펌웨어 | | 비행 중 분리 |
 
 PX4가 보는 6C의 UART 이름은 이 워크스페이스 소스 기준 `GPS1, GPS2, TELEM1, TELEM2, TELEM3`입니다. 시리얼 포트 enum: **TELEM1=101, TELEM2=102, TELEM3=103, GPS1=201, GPS2=202**.
