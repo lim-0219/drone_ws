@@ -41,14 +41,14 @@ sudo sysctl --system | grep rmem
 
 ```bash
 # [노트북] 노트북 주소 확인 후 수신 시작
-ip -br addr show wlp0s20f3
+ip -br addr show wlp0s20f3        # 핫스팟 기대: 172.20.10.2
 mkdir -p ~/flight_videos
 ffmpeg -fflags nobuffer -i udp://@:5000 -c copy ~/flight_videos/test_$(date +%H%M%S).ts
 ```
 ```bash
-# [Pi] <노트북IP>는 위에서 본 주소
+# [Pi] 핫스팟 기준 노트북 주소. 집 Wi-Fi에서 하면 위에서 본 주소로 바꾼다
 ros2 run drone_control survey_camera --ros-args -p fps:=3 \
-  -p video_dir:=~/flight_videos -p video_udp:=udp://<노트북IP>:5000
+  -p video_dir:=~/flight_videos -p video_udp:=udp://172.20.10.2:5000
 ```
 - [ ] Pi 로그에 `video: 960x600 @ 15 fps H.264 ... -> /home/pi/flight_videos/flight_....ts, udp://...` 가 나온다
 - [ ] 노트북 ffmpeg에 `frame=` 숫자가 올라간다

@@ -42,6 +42,7 @@ setup(
             'make_grass_world = drone_control.make_grass_world:main',
             'survey_camera = drone_control.camera_node:main',
             'mosaic_plan = drone_control.mosaic_plan:main',
+            'motor_test = drone_control.motor_test:main',
         ],
     },
 )
