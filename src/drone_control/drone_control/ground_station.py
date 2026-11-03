@@ -302,6 +302,11 @@ class GroundStation(Node):
         """
         altitude = -float(msg.ned_m[2])
         reported = float(msg.agl_m) if msg.agl_valid else None
+        # Height above the takeoff ground (navigator target_source=vehicle, no
+        # range finder) is not a sensor reading that can glitch, and -z above
+        # the EKF origin is the wrong yardstick for it: the origin drifts.
+        if reported is not None and reported > 0.0 and msg.agl_source == 'takeoff_ground':
+            return reported, msg.agl_source
         if reported is not None and reported > 0.0 and (
                 altitude <= 0.0 or 0.5 <= reported / altitude <= 2.0):
             return reported, msg.agl_source

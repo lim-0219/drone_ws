@@ -11,11 +11,26 @@ parameters) in PX4 offboard mode and then, depending on ``final_action``:
   position while drawing the three laser beams and their ground triangle as
   RViz markers (the beams are geometry only; nothing is simulated),
 * ``mosaic`` - treats the target as cell 5 of a 3x3 grid, visits the nine
-  cells in the order ``5 4 1 2 3 6 9 8 7`` the stitcher expects, photographs
-  each one and streams every photo to the ground station
-  (:mod:`drone_control.ground_station`) as a ``CapturedFrame`` the moment it
-  is taken.  The ground station builds the ``drone_stitch`` manifest and runs
-  the stitcher once all nine frames are in.
+  cells in the order ``5 4 1 2 3 6 9 8 7`` the stitcher expects (seen from
+  the vehicle: centre, left, back-left, back, back-right, right, front-right,
+  front, front-left), photographs each one and sends every photo to the
+  ground station (:mod:`drone_control.ground_station`) as a
+  ``CapturedFrame``: the moment it is taken (``send_frames = on_capture``)
+  or, on the real vehicle, once it has landed and disarmed
+  (``after_disarm``).  The ground station builds the ``drone_stitch``
+  manifest and runs the stitcher once all nine frames are in.
+
+  ``after_disarm`` exists because a reliable 7 MB frame over a slow Wi-Fi
+  link blocks the publishing call until the ground station has acknowledged
+  it - up to a minute on a phone hotspot.  This node publishes from its
+  control timer, so during that time the offboard heartbeat stopped and PX4
+  dropped to Hold at every cell.  Photos are saved on the vehicle either way.
+
+  ``target_source = vehicle`` (the real-vehicle default) needs no target at
+  all: when the operator approves the ARM, the vehicle's own position is
+  cell 5, its heading is "front" (cell 8) and the flight altitude counts
+  from the ground it stands on, not from the EKF origin (the barometric
+  origin drifts metres over an afternoon).
 
   The node never arms on its own: after the setpoint stream is warmed up it
   waits in IDLE until the ``arm_approved`` parameter is set to true (by the
@@ -168,11 +183,17 @@ _RANGE_DEVICE_ID = 0x52414E47  # 'RANG'
 _RANGE_VARIANCE = 0.01 * 0.01
 
 # Capture order of the 3x3 mosaic grid - the order drone_stitch requires
-# (drone_stitch.geometry.CAPTURE_ORDER).  Cell layout, X right / Y up:
-#     7 8 9
-#     4 5 6
-#     1 2 3
+# (drone_stitch.geometry.CAPTURE_ORDER).  Cell layout, X right / Y up, where
+# up is the vehicle's heading (image top = body forward):
+#     7 8 9      front-left  front  front-right
+#     4 5 6      left        centre right
+#     1 2 3      back-left   back   back-right
 MOSAIC_CAPTURE_ORDER = (5, 4, 1, 2, 3, 6, 9, 8, 7)
+CELL_DIRECTION = {
+    1: 'back-left', 2: 'back', 3: 'back-right',
+    4: 'left', 5: 'centre', 6: 'right',
+    7: 'front-left', 8: 'front', 9: 'front-right',
+}
 
 
 class NavState(Enum):
@@ -361,7 +382,7 @@ def mosaic_waypoints(centre: Waypoint, spacing: Tuple[float, float],
             y=centre.y + c * gx + s * gy,
             z=centre.z,
             yaw=heading,
-            name=f'grid{grid_id}',
+            name=f'grid{grid_id}-{CELL_DIRECTION[grid_id]}',
             capture=True,
             grid_id=grid_id,
             grid_xy=(gx, gy),
@@ -460,6 +481,9 @@ class WaypointNavigator(Node):
         self._captures_done = 0
         self._hold_target: Optional[Waypoint] = None
         self._hold_reason = ''
+        self._vehicle_target_placed = False     # target_source == 'vehicle'
+        self._ground_z: Optional[float] = None  # NED z of the takeoff ground (vehicle mode)
+        self._pending_frames: List[CapturedFrame] = []   # send_frames == 'after_disarm'
 
         self._handlers: Dict[NavState, Callable[[], None]] = {
             NavState.IDLE: self._run_idle,
@@ -472,7 +496,12 @@ class WaypointNavigator(Node):
             NavState.LANDED: self._run_landed,
         }
 
-        if self._target_latlon is not None:
+        if self._target_from_vehicle:
+            self.get_logger().info(
+                f'Target = the vehicle itself: {len(self._waypoints)} waypoint(s) will be '
+                f'placed when arm_approved is set - centre at its position, front along its '
+                f'heading, {self._target_altitude:.2f} m above the ground it stands on')
+        elif self._target_latlon is not None:
             self.get_logger().info(
                 f'Target lat={self._target_latlon[0]:.7f} lon={self._target_latlon[1]:.7f}: '
                 f'{len(self._waypoints)} waypoint(s) will be placed once PX4 reports its '
@@ -500,7 +529,8 @@ class WaypointNavigator(Node):
             self.get_logger().info(
                 f'mosaic: session={self._session_id} {self._capture_total} cells, '
                 f'spacing X={self._mosaic_spacing[0]:.2f}m Y={self._mosaic_spacing[1]:.2f}m, '
-                f'frames -> {self._frame_topic}, after_mosaic={self._after_mosaic}, '
+                f'frames -> {self._frame_topic} ({self._send_frames}), '
+                f'after_mosaic={self._after_mosaic}, '
                 f'{self._capture_attempts} capture attempt(s) per cell then HOLD')
             if self._mosaic_plan is not None:
                 self.get_logger().info(f'mosaic plan: {self._mosaic_plan.describe()}')
@@ -560,6 +590,11 @@ class WaypointNavigator(Node):
         # (degrees).  Both non-zero = used, and target_x/target_y are ignored.
         self.declare_parameter('target_lat', 0.0)
         self.declare_parameter('target_lon', 0.0)
+        # 'parameters': target_x/target_y (or target_lat/target_lon) and
+        # target_yaw as given, altitude above the EKF origin.
+        # 'vehicle': ignore those; at ARM approval the target is the vehicle's
+        # own position and heading, altitude above the ground it stands on.
+        self.declare_parameter('target_source', 'parameters')
         # Refuse to arm while any waypoint is farther than this from the
         # vehicle (metres, horizontal).  0 disables the check.
         self.declare_parameter('max_target_distance', 100.0)
@@ -587,6 +622,10 @@ class WaypointNavigator(Node):
         self.declare_parameter('image_height', 960)
         self.declare_parameter('after_mosaic', 'hover')
         self.declare_parameter('frame_topic', '/survey/frames')
+        # 'on_capture': publish each photo as soon as it is taken (SITL, local DDS).
+        # 'after_disarm': keep them and publish once the vehicle has disarmed,
+        # so a slow link to the ground station cannot stall the offboard stream.
+        self.declare_parameter('send_frames', 'on_capture')
         self.declare_parameter('session_id', '')
         # photo capture
         self.declare_parameter('photo_dir', '~/drone_survey_photos')
@@ -637,10 +676,26 @@ class WaypointNavigator(Node):
 
         yaw_in_degrees = bool(self.get_parameter('yaw_in_degrees').value)
 
+        target_source = str(self.get_parameter('target_source').value).strip().lower()
+        if target_source not in ('parameters', 'vehicle'):
+            raise ValueError('parameter "target_source" must be "parameters" or "vehicle"')
+        self._target_from_vehicle = target_source == 'vehicle'
+        self._send_frames = str(self.get_parameter('send_frames').value).strip().lower()
+        if self._send_frames not in ('on_capture', 'after_disarm'):
+            raise ValueError('parameter "send_frames" must be "on_capture" or "after_disarm"')
+
         target_lat = float(self.get_parameter('target_lat').value)
         target_lon = float(self.get_parameter('target_lon').value)
         self._target_latlon: Optional[Tuple[float, float]] = None
-        if target_lat != 0.0 or target_lon != 0.0:
+        if self._target_from_vehicle:
+            ignored = [name for name in ('target_x', 'target_y', 'target_yaw',
+                                         'target_lat', 'target_lon')
+                       if float(self.get_parameter(name).value) != 0.0]
+            if ignored:
+                self.get_logger().warn(
+                    f'target_source=vehicle: ignoring {", ".join(ignored)} - the target is '
+                    f'where the vehicle stands, facing where it faces, at ARM approval')
+        elif target_lat != 0.0 or target_lon != 0.0:
             if target_lat == 0.0 or target_lon == 0.0:
                 raise ValueError('set both "target_lat" and "target_lon" (degrees), or neither')
             if not (-90.0 <= target_lat <= 90.0 and -180.0 <= target_lon <= 180.0):
@@ -665,10 +720,15 @@ class WaypointNavigator(Node):
         mosaic_planned = self._final_action == 'mosaic' and (
             target_altitude > 0.0 or all(v > 0.0 for v in extent))
         single_target = self._final_action in ('survey', 'hover', 'land') and target_altitude > 0.0
+        self._target_altitude = target_altitude
+        if self._target_from_vehicle and not (single_target or mosaic_planned):
+            raise ValueError('target_source "vehicle" needs "target_altitude" > 0 (or, for '
+                             'mosaic, "mosaic_extent_x/y" > 0); it does not use waypoint_file')
         if single_target or mosaic_planned:
             if self._final_action == 'mosaic':
                 target_altitude, self._mosaic_spacing, self._mosaic_plan = \
                     self._plan_mosaic_grid(target_altitude, extent)
+                self._target_altitude = target_altitude
             target_yaw = float(self.get_parameter('target_yaw').value)
             target = Waypoint(
                 x=float(self.get_parameter('target_x').value),
@@ -681,13 +741,19 @@ class WaypointNavigator(Node):
                 capture=self._final_action in ('survey', 'mosaic'),
                 grid_id=5,
             )
-            if self._target_latlon is not None:
+            if self._target_latlon is not None or self._target_from_vehicle:
                 # Placeholder at the origin until _target_ready() projects the
-                # lat/lon into the local frame; the count (capture_total) is right.
+                # lat/lon (or _place_at_vehicle() reads the vehicle pose) into
+                # the local frame; the count (capture_total) is right already.
                 target = replace(target, x=0.0, y=0.0)
                 self._target_template = target
             self._waypoints = self._mission_from_target(target)
-            where = 'target_lat/target_lon' if self._target_latlon else 'target_x/target_y'
+            if self._target_from_vehicle:
+                where = 'the vehicle position'
+            elif self._target_latlon is not None:
+                where = 'target_lat/target_lon'
+            else:
+                where = 'target_x/target_y'
             if self._final_action != 'mosaic':
                 self._waypoint_source = f'{where}/target_altitude parameters'
             else:
@@ -1029,7 +1095,7 @@ class WaypointNavigator(Node):
             f'_N{pose.x:+.2f}_E{pose.y:+.2f}_alt{pose.altitude:.2f}')
         png_path = base + '.png'
 
-        agl = self._current_agl()
+        agl = self._frame_agl(pose)
         metadata = {
             'capture_time_utc': stamp,
             'ros_time_ns': self.get_clock().now().nanoseconds,
@@ -1073,8 +1139,43 @@ class WaypointNavigator(Node):
         return png_path
 
     def _publish_frame(self, image: Image, pose: Waypoint, target: Waypoint) -> None:
-        """Hand the photo and its pose to the ground station."""
-        agl = self._current_agl()
+        """Hand the photo and its pose to the ground station (now, or after disarm)."""
+        msg = self._make_frame(image, pose, target)
+        if self._send_frames == 'after_disarm':
+            self._pending_frames.append(msg)
+            self.get_logger().info(
+                f'Frame {msg.sequence}/{msg.total} (cell {msg.grid_id} '
+                f'{CELL_DIRECTION.get(msg.grid_id, "")}) kept; sent to {self._frame_topic} '
+                f'after the vehicle disarms')
+            return
+        self._frame_pub.publish(msg)
+        self.get_logger().info(
+            f'Frame {msg.sequence}/{msg.total} (cell {msg.grid_id}) sent to {self._frame_topic}')
+
+    def _flush_pending_frames(self) -> None:
+        """
+        send_frames == 'after_disarm': publish the kept frames, one per tick, once disarmed.
+
+        The publish can block for many seconds on a slow link (reliable, 7 MB),
+        which is harmless now that nothing has to be streamed to PX4.  The
+        publisher is transient-local, so a ground station started later still
+        receives them while this node runs.
+        """
+        if not self._pending_frames or self._vehicle_status is None or self._is_armed():
+            return
+        msg = self._pending_frames.pop(0)
+        self._frame_pub.publish(msg)
+        self.get_logger().info(
+            f'Frame {msg.sequence}/{msg.total} (cell {msg.grid_id}) sent to {self._frame_topic} '
+            f'after disarm ({len(self._pending_frames)} left)')
+        if not self._pending_frames:
+            self.get_logger().info(
+                'All kept frames published; keep this node running until the ground station '
+                'has them (photos are also in ' + self._photo_dir + ')')
+
+    def _make_frame(self, image: Image, pose: Waypoint, target: Waypoint) -> CapturedFrame:
+        """Build the CapturedFrame for one photo, with the pose and height at capture time."""
+        agl = self._frame_agl(pose)
         msg = CapturedFrame()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self._session_id
@@ -1091,14 +1192,19 @@ class WaypointNavigator(Node):
         msg.grid_local_xy_m = [float(target.grid_xy[0]), float(target.grid_xy[1])]
         msg.grid_spacing_m = [float(self._mosaic_spacing[0]), float(self._mosaic_spacing[1])]
         msg.image = image
-        self._frame_pub.publish(msg)
-        self.get_logger().info(
-            f'Frame {msg.sequence}/{msg.total} (cell {msg.grid_id}) sent to {self._frame_topic}')
-        altitude = -float(pose.z)
+        altitude = -float(pose.z) if self._ground_z is None else self._ground_z - float(pose.z)
         if agl is not None and altitude > 0.5 and not 0.5 <= agl[0] / altitude <= 2.0:
             self.get_logger().warn(
                 f'range AGL {agl[0]:.2f} m ({agl[1]}) disagrees with altitude {altitude:.2f} m: '
                 f'is something under the range finder?')
+        return msg
+
+    def _frame_agl(self, pose: Waypoint) -> Optional[Tuple[float, str]]:
+        """Range-finder height if any, else (target_source vehicle) height above takeoff."""
+        agl = self._current_agl()
+        if agl is None and self._ground_z is not None:
+            return self._ground_z - float(pose.z), 'takeoff_ground'
+        return agl
 
     def _publish_laser_markers(self, beams: List[Beam], agl: float, source: str) -> None:
         """Draw the three beams, their ground spots and the ground triangle."""
@@ -1175,6 +1281,7 @@ class WaypointNavigator(Node):
 
         # After the handler, so the command reflects the state entered this tick.
         self._publish_laser_command()
+        self._flush_pending_frames()
 
     def _current_position(self) -> Optional[Waypoint]:
         """Return the current position as a Waypoint, or None if not yet valid."""
@@ -1242,6 +1349,56 @@ class WaypointNavigator(Node):
                 return False
         return True
 
+    def _place_at_vehicle(self) -> bool:
+        """
+        target_source == 'vehicle': build the mission around the vehicle at ARM approval.
+
+        Cell 5 (or the single target) is where the vehicle stands, "front"
+        (cell 8) is where it faces, and the altitude counts from the ground
+        under it.  The pose is read on the first IDLE tick after approval and
+        then kept; withdrawing the approval before takeoff discards it, so the
+        next approval reads the pose again.  Returns True once placed.
+        """
+        if self._vehicle_target_placed:
+            if self._arm_approved or self._is_armed():
+                return True
+            self._vehicle_target_placed = False
+            self._ground_z = None
+            self.get_logger().info('ARM approval withdrawn: the target will be read from the '
+                                   'vehicle again at the next approval')
+
+        # Not heading_good_for_control: with a compass PX4 sets it only after
+        # the in-flight yaw alignment, i.e. never on the ground.
+        current = self._current_position()
+        if current is None or not math.isfinite(current.yaw):
+            self.get_logger().warn(
+                'Waiting for a valid position and heading from PX4 (GPS fix, compass) to place '
+                'the target on the vehicle - no ARM until then', throttle_duration_sec=10.0)
+            return False
+        assert self._target_template is not None   # set in _read_parameters
+
+        if not self._arm_approved:
+            self.get_logger().info(
+                f'ARM gate closed. On approval the target is the vehicle: N={current.x:.2f} '
+                f'E={current.y:.2f} heading={math.degrees(current.yaw):.1f} deg, '
+                f'{self._target_altitude:.2f} m above this ground - approve with  ros2 param set '
+                f'{self.get_fully_qualified_name()} arm_approved true',
+                throttle_duration_sec=10.0)
+            return False
+
+        centre = replace(self._target_template, x=current.x, y=current.y,
+                         z=current.z - self._target_altitude, yaw=_wrap_pi(current.yaw))
+        self._waypoints = self._mission_from_target(centre)
+        self._vehicle_target_placed = True
+        self._ground_z = current.z
+        self.get_logger().info(
+            f'Target placed on the vehicle: N={current.x:.2f} E={current.y:.2f} '
+            f'heading={math.degrees(current.yaw):.1f} deg, ground z={current.z:.2f} m -> '
+            f'flight z={centre.z:.2f} m ({self._target_altitude:.2f} m above the ground):')
+        for waypoint in self._waypoints:
+            self.get_logger().info(f'  - {waypoint.describe()}')
+        return True
+
     def _target_reached(self, target: Waypoint) -> bool:
         """Report whether `target` has been held within tolerance long enough."""
         distance = self._distance_to(target)
@@ -1271,6 +1428,8 @@ class WaypointNavigator(Node):
 
         # Nothing below (takeoff included) may run on a target that is not
         # placed yet or is implausibly far away.
+        if self._target_from_vehicle and not self._place_at_vehicle():
+            return
         if not self._target_ready():
             return
 

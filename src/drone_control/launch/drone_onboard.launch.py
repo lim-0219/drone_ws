@@ -9,20 +9,31 @@ ROS through the uXRCE-DDS agent on the TELEM2 serial link, started separately:
     MicroXRCEAgent serial --dev /dev/ttyAMA0 -b 921600
 
 The ground station and the stitcher web app run on the ground PC.  Default
-mission: a 20 x 10 m mosaic around (target_x, target_y) at the altitude the
-B0353's footprint needs for that area (6.25 m with the stock 3.6 mm lens,
-see ``ros2 run drone_control mosaic_plan``)::
+mission: a 20 x 10 m mosaic at the altitude the B0353's footprint needs for
+that area (6.25 m with the stock 3.6 mm lens, see
+``ros2 run drone_control mosaic_plan``), centred on the vehicle itself::
 
-    ros2 launch drone_control drone_onboard.launch.py \\
-        target_x:=5.0 target_y:=0.0 \\
-        camera_info_url:=~/camera_calibration/b0353.yaml camera_hfov_rad:=1.3495
+    ros2 launch drone_control drone_onboard.launch.py target_altitude:=5.0 \\
+        mosaic_extent_x:=15 mosaic_extent_y:=9
 
-Or give the target as GPS coordinates (e.g. picked on a map); the node
-places the grid once PX4 has a GPS fix and refuses to arm while any cell is
-more than ``max_target_distance`` (100 m) from the vehicle::
+``target_source:=vehicle`` (default): nothing to type.  When the ARM is
+approved, the vehicle's position is cell 5, its heading is "front" (cell 8)
+and target_altitude counts from the ground it stands on.  Cells are visited
+centre, left, back-left, back, back-right, right, front-right, front,
+front-left.  Place the vehicle facing along the 9 m side's "front".
 
-    ros2 launch drone_control drone_onboard.launch.py \\
+``target_source:=parameters`` flies to target_x/target_y (NED, metres) or
+target_lat/target_lon instead, at target_yaw, altitude above the EKF origin;
+the node refuses to arm while any cell is more than ``max_target_distance``
+(100 m) from the vehicle::
+
+    ros2 launch drone_control drone_onboard.launch.py target_source:=parameters \\
         target_lat:=37.5665123 target_lon:=126.9780456
+
+Photos are saved on the Pi (photo_dir) as they are taken and sent to the
+ground station only after the vehicle has disarmed (``send_frames``), so a
+slow Wi-Fi link cannot stall the offboard stream; keep this launch running
+after landing until the ground station has them.
 
 After a checkerboard calibration set ``camera_hfov_rad := 2*atan(W/(2*fx))``;
 the navigator warns at start-up if the published CameraInfo disagrees.
@@ -77,7 +88,14 @@ def generate_launch_description() -> LaunchDescription:
                               description='ARM gate. Keep false: the node streams setpoints '
                                           'and waits until you run  ros2 param set '
                                           '/waypoint_navigator arm_approved true  at the field.'),
-        DeclareLaunchArgument('target_x', default_value='5.0',
+        DeclareLaunchArgument('target_source', default_value='vehicle',
+                              description='"vehicle": centre, heading and ground height from the '
+                                          'vehicle at ARM approval (target_x/y/yaw/lat/lon '
+                                          'ignored). "parameters": use target_*.'),
+        DeclareLaunchArgument('send_frames', default_value='after_disarm',
+                              description='"after_disarm": photos go to the ground station once '
+                                          'landed. "on_capture": as each one is taken.'),
+        DeclareLaunchArgument('target_x', default_value='0.0',
                               description='Cell-5 North coordinate, metres (NED x).'),
         DeclareLaunchArgument('target_y', default_value='0.0',
                               description='Cell-5 East coordinate, metres (NED y).'),
@@ -162,6 +180,8 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             'final_action': _typed('mission', str),
             'arm_approved': _typed('arm_approved', bool),
+            'target_source': _typed('target_source', str),
+            'send_frames': _typed('send_frames', str),
             'target_x': _typed('target_x', float),
             'target_y': _typed('target_y', float),
             'target_lat': _typed('target_lat', float),

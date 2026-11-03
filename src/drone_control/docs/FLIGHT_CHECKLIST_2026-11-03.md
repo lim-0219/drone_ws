@@ -12,7 +12,7 @@
 ## A. 출발 전 (집, 프롭 없음)
 
 ### A1. 코드를 Pi로 보내기
-오늘 코드가 바뀌었습니다. 제자리 호버, 영상 녹화, `forward_target.sh`가 새로 들어갔습니다. Pi와 노트북이 같은 Wi-Fi에 있어야 합니다.
+오늘 코드가 바뀌었습니다. 제자리 호버, 영상 녹화가 새로 들어갔고, 목표(중심·방향·고도)는 승인하는 순간의 기체 위치에서 자동으로 정해집니다(`forward_target.sh` 불필요). Pi와 노트북이 같은 Wi-Fi에 있어야 합니다.
 
 ```bash
 # [노트북]
@@ -141,11 +141,11 @@ rpicam-hello --list-cameras       # arducam-pivariety 1920x1200 이 보여야 �
 기체를 이륙할 자리에 두고, 사람은 5 m 이상 떨어진다.
 ```bash
 # [Pi 창 2]
-ARGS=$(~/drone_ws/src/drone_control/tools/forward_target.sh 0)
 ros2 launch drone_control drone_onboard.launch.py mission:=land target_altitude:=4.0 \
-    reach_hold_time:=10 camera:=false $ARGS
+    reach_hold_time:=10 camera:=false
 ```
-- [ ] 로그 `target (N=… E=… alt=4.00m …)`의 N, E가 `forward_target.sh`가 출력한 현재 위치와 같다
+- [ ] 로그 `ARM gate closed. On approval the target is the vehicle: … heading=… deg, 4.00 m above this ground`가 나온다. heading이 휴대폰 나침반으로 잰 모터 1·3 쪽 방위와 10~15° 안에서 맞는다
+- [ ] 기체를 놓은 자리가 중심, 모터 1·3 쪽이 앞이다. 위치·방향·고도 기준은 승인하는 순간의 기체에서 자동으로 정해진다
 - [ ] `ARM gate closed … waiting` 이 10초마다 나오고 아무 일도 일어나지 않는다
 
 준비가 되면 승인한다.
@@ -186,10 +186,9 @@ ros2 run drone_control ground_station
 카메라를 쓰는 다른 프로그램(`rpicam-vid`, `rpicam-hello`)이 꺼져 있어야 한다.
 ```bash
 # [Pi 창 2]
-ARGS=$(~/drone_ws/src/drone_control/tools/forward_target.sh 0)
 ros2 launch drone_control drone_onboard.launch.py mission:=mosaic target_altitude:=4.0 \
     mosaic_extent_x:=12 mosaic_extent_y:=7 after_mosaic:=land \
-    video_dir:=~/flight_videos video_udp:=udp://172.20.10.2:5000 $ARGS
+    video_dir:=~/flight_videos video_udp:=udp://172.20.10.2:5000
 ```
 승인 전에 확인한다.
 - [ ] `mosaic plan: altitude 4.00 m … overlap 56 % / 63 %, mosaic 12.0 x 7.0 m`
@@ -201,11 +200,12 @@ ros2 launch drone_control drone_onboard.launch.py mission:=mosaic target_altitud
 ros2 param set /waypoint_navigator arm_approved true
 ```
 **예상 동작**: 시동 → 4 m → 9칸을 돌며 칸마다 3초 정지 후 촬영 → 착륙. 비행 약 1.5~2분.
-- [ ] 노트북 창 2: `frame 1/9 … 9/9` → `stitch OK … map.png`
+- [ ] 비행 순서(기체 기준): 중앙 → 왼쪽 → 왼쪽 뒤 → 뒤 → 오른쪽 뒤 → 오른쪽 → 오른쪽 앞 → 앞 → 왼쪽 앞
+- [ ] 사진은 비행 중 Pi에만 저장된다. **착륙해서 시동이 꺼진 뒤** 노트북 창 2에 `frame 1/9 … 9/9` → `stitch OK … map.png`
 - [ ] 한 칸에서 멈춰 계속 떠 있으면(`HOLD`) 카메라 문제다. SB → Position → 수동 착륙
 
 ### E4. 착륙 후
-1. 시동이 꺼진 걸 확인하고 Pi 창 2에서 Ctrl+C (녹화 종료), 노트북 창 1에서 `q`.
+1. 시동이 꺼진 걸 확인하고, 노트북 창 2에 `stitch OK`가 나올 때까지 기다린 뒤 Pi 창 2에서 Ctrl+C (녹화 종료), 노트북 창 1에서 `q`. 사진은 시동이 꺼진 뒤에 전송되므로 그 전에 Ctrl+C 하면 노트북으로 안 간다 (Pi `~/drone_survey_photos`에는 남음).
 2. Pi에 저장된 원본 영상(끊김 없음)을 노트북으로 가져온다.
 ```bash
 # [노트북]
@@ -248,6 +248,6 @@ cd ~/drone_ws/src/drone-stitching && env -u PYTHONPATH .venv/bin/python -I -m dr
 | 자동 비행이 이상함 | SB → **Position** (조종기로 넘어옴) |
 | 조종 불능, 사람 쪽으로 감 | SD **킬 스위치** (모터 즉시 정지, 추락) |
 | Pi 프로그램이 멈춤 | 1초 뒤 PX4가 자동으로 제자리 정지(Hold). SB → Position으로 받아서 착륙 |
-| Wi-Fi 끊김 | 비행에는 영향 없음 (Pi↔Pixhawk는 선 연결). 사진 전송과 실시간 영상만 멈추고, Pi 원본 영상은 계속 녹화됨 |
+| Wi-Fi 끊김 | 비행에는 영향 없음 (Pi↔Pixhawk는 선 연결, 사진은 착륙 후 전송). 실시간 영상만 멈추고, Pi 원본 영상과 사진은 계속 저장됨 |
 | 조종기 신호 끊김 | PX4가 자동 귀환(RTL) |
 | 배터리 30 % | 즉시 착륙 |
